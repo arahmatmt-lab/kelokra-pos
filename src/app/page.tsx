@@ -26,6 +26,8 @@ import {
   Clock,
   LogOut,
   CheckCircle2,
+  AlertTriangle,
+  Download,
 } from "lucide-react";
 import {
   AuditLogEntry,
@@ -732,6 +734,95 @@ export default function KelokraApp() {
     currentRole === "CASHIER" ||
     (currentRole === "OWNER" && activeOwnerMode === "OWNER_INCLUDE_KASIR");
 
+  // Owner 1-week expiry warning (<= 7 hari lagi)
+  const ownerExpiringWithinWeek =
+    currentRole === "OWNER" &&
+    activeAccountTime !== null &&
+    !activeAccountTime.isExpired &&
+    activeAccountTime.totalDaysLeft <= 7;
+
+  // Reusable Account & Backup handlers
+  const handleExportBackup = () => {
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      tenantId: DEFAULT_TENANT_ID,
+      storeSettings,
+      products,
+      sales,
+      movements,
+      suppliers,
+      customers,
+      expenses,
+      accounts,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `KELOKRA-Backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast("Backup data penjualan & toko (.JSON) berhasil diunduh!");
+  };
+
+  const handleCreateAccountsBatch = (newAccounts: ManagedAccount[]) => {
+    setAccounts((prev) => [...newAccounts, ...prev]);
+    const summaryNames = newAccounts
+      .map((a) => `${a.role === "OWNER" ? "Owner" : "Kasir"} (${a.name})`)
+      .join(" + ");
+    appendAudit(
+      "ACCOUNTS_CREATED",
+      "Super Admin",
+      `Super Admin membuat akun: ${summaryNames} dengan durasi ${newAccounts[0]?.durationMonths} bulan.`
+    );
+    showToast(`Berhasil membuat akun: ${summaryNames}!`);
+  };
+
+  const handleExtendAccount = (accountId: string, addMonths: number) => {
+    setAccounts((prev) =>
+      prev.map((a) => {
+        if (a.id !== accountId) return a;
+        const base =
+          new Date(a.expiresAt).getTime() > Date.now()
+            ? a.expiresAt
+            : new Date().toISOString();
+        return {
+          ...a,
+          durationMonths: a.durationMonths + addMonths,
+          expiresAt: addMonthsToIso(base, addMonths),
+          status: "AKTIF",
+        };
+      })
+    );
+    appendAudit(
+      "ACCOUNT_EXTENDED",
+      "Super Admin",
+      `Super Admin memperpanjang masa aktif akun selama +${addMonths} bulan.`
+    );
+    showToast(`Masa aktif akun diperpanjang +${addMonths} bulan!`);
+  };
+
+  const handleToggleAccountStatus = (accountId: string) => {
+    setAccounts((prev) =>
+      prev.map((a) =>
+        a.id === accountId
+          ? {
+              ...a,
+              status: a.status === "AKTIF" ? "NONAKTIF" : "AKTIF",
+            }
+          : a
+      )
+    );
+    showToast("Status aktif akun diperbarui!");
+  };
+
+  const handleDeleteAccount = (accountId: string) => {
+    setAccounts((prev) => prev.filter((a) => a.id !== accountId));
+    showToast("Akun berhasil dihapus oleh Super Admin.");
+  };
+
   // Strict RBAC Navigation Items
   const navItems = [
     {
@@ -1078,13 +1169,15 @@ export default function KelokraApp() {
                 className="p-2 rounded-xl border border-slate-200/80 hover:bg-slate-50 text-slate-600 relative"
               >
                 <Bell className="w-4 h-4" />
-                {(lowStockCount > 0 || expiringAccountsCount > 0) && (
+                {(lowStockCount > 0 ||
+                  expiringAccountsCount > 0 ||
+                  ownerExpiringWithinWeek) && (
                   <span className="w-2 h-2 rounded-full bg-rose-500 absolute top-1.5 right-1.5" />
                 )}
               </button>
 
               {showNotifications && (
-                <div className="absolute right-0 top-11 w-72 bg-white rounded-2xl border border-slate-200 shadow-xl p-3.5 z-50 space-y-2.5 text-xs">
+                <div className="absolute right-0 top-11 w-80 bg-white rounded-2xl border border-slate-200 shadow-xl p-3.5 z-50 space-y-2.5 text-xs">
                   <div className="flex items-center justify-between border-b border-slate-100 pb-2">
                     <span className="font-extrabold text-navy-800">
                       Notifikasi KELOKRA
@@ -1096,6 +1189,31 @@ export default function KelokraApp() {
                       Tutup
                     </button>
                   </div>
+
+                  {ownerExpiringWithinWeek && activeAccountTime && (
+                    <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 space-y-2">
+                      <p className="font-extrabold text-rose-700">
+                        ⚠️ Masa Aktif {activeAccountTime.label}!
+                      </p>
+                      <p className="text-[11px] leading-relaxed">
+                        Silakan lanjutkan langganan ke Super Admin atau{" "}
+                        <b>backup data penjualan Anda segera</b> sebelum akun
+                        berakhir.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleExportBackup();
+                          setShowNotifications(false);
+                        }}
+                        className="w-full py-1.5 px-3 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold text-[11px] inline-flex items-center justify-center gap-1.5"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>Backup Data Penjualan Sekarang</span>
+                      </button>
+                    </div>
+                  )}
+
                   {currentRole === "SUPER_ADMIN" ? (
                     expiringAccountsCount > 0 ? (
                       <div className="p-2.5 rounded-xl bg-amber-50 text-amber-900">
@@ -1112,11 +1230,11 @@ export default function KelokraApp() {
                       <b>Stok Menipis:</b> {lowStockCount} produk berada di
                       bawah batas stok minimum.
                     </div>
-                  ) : (
+                  ) : !ownerExpiringWithinWeek ? (
                     <div className="p-2.5 rounded-xl bg-slate-50 text-slate-600">
                       Belum ada peringatan baru. Sistem siap digunakan.
                     </div>
-                  )}
+                  ) : null}
                 </div>
               )}
             </div>
@@ -1207,13 +1325,56 @@ export default function KelokraApp() {
         </header>
 
         {/* ACTIVE VIEW CONTAINER */}
-        <main className="flex-1 p-4 sm:p-6 max-w-[1440px] w-full mx-auto">
+        <main className="flex-1 p-4 sm:p-6 max-w-[1440px] w-full mx-auto space-y-5">
+          {/* Peringatan Otomatis 1 Minggu Sebelum Habis untuk Owner */}
+          {ownerExpiringWithinWeek && activeAccountTime && (
+            <div className="rounded-2xl bg-gradient-to-r from-amber-50 via-rose-50/70 to-amber-50 border border-rose-200 p-4 sm:p-5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <div>
+                  <p className="text-sm font-extrabold text-rose-800">
+                    Peringatan Masa Aktif Akun: {activeAccountTime.label} (s/d{" "}
+                    {activeAccount ? formatDateOnly(activeAccount.expiresAt) : "-"})
+                  </p>
+                  <p className="text-xs text-rose-700 mt-0.5">
+                    Lanjutkan langganan Anda dengan menghubungi Super Admin atau{" "}
+                    <b>backup data penjualan Anda segera</b> sebelum masa aktif berakhir.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleExportBackup}
+                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-extrabold shadow-xs inline-flex items-center gap-1.5 transition"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>Backup Data Penjualan Sekarang</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveMenu("reports")}
+                  className="px-3.5 py-2 rounded-xl bg-white hover:bg-slate-50 border border-rose-200 text-rose-700 text-xs font-bold transition"
+                >
+                  Lihat Laporan
+                </button>
+              </div>
+            </div>
+          )}
+
           {activeMenu === "dashboard" &&
             (currentRole === "SUPER_ADMIN" ? (
               <SuperAdminDashboardView
                 userName={currentUserName}
                 accounts={accounts}
                 onNavigate={setActiveMenu}
+                onCreateAccountsBatch={handleCreateAccountsBatch}
+                onExtendAccount={handleExtendAccount}
+                onToggleAccountStatus={handleToggleAccountStatus}
+                onDeleteAccount={handleDeleteAccount}
               />
             ) : (
               <DashboardView
@@ -1357,91 +1518,15 @@ export default function KelokraApp() {
               storeSettings={storeSettings}
               auditLogs={auditLogs}
               onNavigate={setActiveMenu}
-              onCreateAccountsBatch={(newAccounts) => {
-                setAccounts((prev) => [...newAccounts, ...prev]);
-                const summaryNames = newAccounts
-                  .map(
-                    (a) =>
-                      `${a.role === "OWNER" ? "Owner" : "Kasir"} (${a.name})`
-                  )
-                  .join(" + ");
-                appendAudit(
-                  "ACCOUNTS_CREATED",
-                  "Super Admin",
-                  `Super Admin membuat akun: ${summaryNames} dengan durasi ${newAccounts[0]?.durationMonths} bulan.`
-                );
-                showToast(`Berhasil membuat akun: ${summaryNames}!`);
-              }}
-              onExtendAccount={(accountId, addMonths) => {
-                setAccounts((prev) =>
-                  prev.map((a) => {
-                    if (a.id !== accountId) return a;
-                    const base =
-                      new Date(a.expiresAt).getTime() > Date.now()
-                        ? a.expiresAt
-                        : new Date().toISOString();
-                    return {
-                      ...a,
-                      durationMonths: a.durationMonths + addMonths,
-                      expiresAt: addMonthsToIso(base, addMonths),
-                      status: "AKTIF",
-                    };
-                  })
-                );
-                appendAudit(
-                  "ACCOUNT_EXTENDED",
-                  "Super Admin",
-                  `Super Admin memperpanjang masa aktif akun selama +${addMonths} bulan.`
-                );
-                showToast(`Masa aktif akun diperpanjang +${addMonths} bulan!`);
-              }}
-              onToggleAccountStatus={(accountId) => {
-                setAccounts((prev) =>
-                  prev.map((a) =>
-                    a.id === accountId
-                      ? {
-                          ...a,
-                          status: a.status === "AKTIF" ? "NONAKTIF" : "AKTIF",
-                        }
-                      : a
-                  )
-                );
-                showToast("Status aktif akun diperbarui!");
-              }}
-              onDeleteAccount={(accountId) => {
-                setAccounts((prev) => prev.filter((a) => a.id !== accountId));
-                showToast("Akun berhasil dihapus oleh Super Admin.");
-              }}
+              onCreateAccountsBatch={handleCreateAccountsBatch}
+              onExtendAccount={handleExtendAccount}
+              onToggleAccountStatus={handleToggleAccountStatus}
+              onDeleteAccount={handleDeleteAccount}
               onUpdateSettings={(next) => {
                 setStoreSettings(next);
                 showToast("Pengaturan & metode pembayaran berhasil disimpan!");
               }}
-              onExportBackup={() => {
-                const payload = {
-                  exportedAt: new Date().toISOString(),
-                  tenantId: DEFAULT_TENANT_ID,
-                  storeSettings,
-                  products,
-                  sales,
-                  movements,
-                  suppliers,
-                  customers,
-                  expenses,
-                  accounts,
-                };
-                const blob = new Blob([JSON.stringify(payload, null, 2)], {
-                  type: "application/json",
-                });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement("a");
-                a.href = url;
-                a.download = `KELOKRA-Backup-${new Date()
-                  .toISOString()
-                  .slice(0, 10)}.json`;
-                a.click();
-                URL.revokeObjectURL(url);
-                showToast("File Backup JSON berhasil diunduh!");
-              }}
+              onExportBackup={handleExportBackup}
               onResetAllData={() => {
                 localStorage.removeItem(STORAGE_KEY);
                 setProducts([]);

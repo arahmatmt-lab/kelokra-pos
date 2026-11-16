@@ -11,14 +11,20 @@ import {
   Sparkles,
   BarChart3,
   TrendingUp,
+  Eye,
 } from "lucide-react";
 import { ManagedAccount } from "@/types/nextpos";
 import { formatDateOnly, getRemainingTimeInfo } from "@/lib/format";
+import { StoreAccountDetailModal } from "@/components/StoreAccountDetailModal";
 
 interface SuperAdminDashboardViewProps {
   userName: string;
   accounts: ManagedAccount[];
   onNavigate: (menu: string) => void;
+  onCreateAccountsBatch: (newAccounts: ManagedAccount[]) => void;
+  onExtendAccount: (accountId: string, addMonths: number) => void;
+  onToggleAccountStatus: (accountId: string) => void;
+  onDeleteAccount: (accountId: string) => void;
 }
 
 const MONTH_LABELS = [
@@ -40,10 +46,15 @@ export function SuperAdminDashboardView({
   userName,
   accounts,
   onNavigate,
+  onCreateAccountsBatch,
+  onExtendAccount,
+  onToggleAccountStatus,
+  onDeleteAccount,
 }: SuperAdminDashboardViewProps) {
   const [selectedYear, setSelectedYear] = useState<number>(
     new Date().getFullYear()
   );
+  const [detailOwner, setDetailOwner] = useState<ManagedAccount | null>(null);
 
   // Catatan langganan dihitung khusus saat Super Admin menambahkan akun Owner
   const ownerAccounts = accounts.filter((a) => a.role === "OWNER");
@@ -414,11 +425,12 @@ export function SuperAdminDashboardView({
             <table className="w-full text-left border-collapse text-sm">
               <thead>
                 <tr className="border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase">
-                  <th className="py-3 px-3">Nama Toko & Owner</th>
-                  <th className="py-3 px-3">Tipe Akun</th>
+                  <th className="py-3 px-3">Nama Toko</th>
+                  <th className="py-3 px-3">Type Akun</th>
                   <th className="py-3 px-3">Mulai Langganan</th>
                   <th className="py-3 px-3">Jenis Durasi</th>
                   <th className="py-3 px-3">Sisa Waktu</th>
+                  <th className="py-3 px-3 text-right">Detail</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -430,9 +442,6 @@ export function SuperAdminDashboardView({
                       <td className="py-3 px-3">
                         <p className="font-bold text-navy-800">
                           {acc.storeName}
-                        </p>
-                        <p className="text-xs text-slate-500">
-                          Owner: {acc.name} (@{acc.username})
                         </p>
                       </td>
                       <td className="py-3 px-3 text-xs font-bold">
@@ -478,6 +487,16 @@ export function SuperAdminDashboardView({
                           <span>{timeInfo.label}</span>
                         </span>
                       </td>
+                      <td className="py-3 px-3 text-right">
+                        <button
+                          type="button"
+                          onClick={() => setDetailOwner(acc)}
+                          title="Lihat Detail Akun Owner & Kasir"
+                          className="p-2 rounded-xl border border-slate-200 hover:border-emerald-500 hover:bg-emerald-50 text-navy-800 hover:text-emerald-700 inline-flex items-center justify-center transition"
+                        >
+                          <Eye className="w-4 h-4" />
+                        </button>
+                      </td>
                     </tr>
                   );
                 })}
@@ -486,6 +505,17 @@ export function SuperAdminDashboardView({
           </div>
         )}
       </div>
+
+      {/* Modal Detail Akun Owner & Kasir (Icon Mata) */}
+      <StoreAccountDetailModal
+        ownerAccount={detailOwner}
+        allAccounts={accounts}
+        onClose={() => setDetailOwner(null)}
+        onCreateAccountsBatch={onCreateAccountsBatch}
+        onExtendAccount={onExtendAccount}
+        onToggleAccountStatus={onToggleAccountStatus}
+        onDeleteAccount={onDeleteAccount}
+      />
     </div>
   );
 }

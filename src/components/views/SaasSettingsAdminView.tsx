@@ -22,8 +22,6 @@ import {
   Banknote,
   Clock,
   Eye,
-  EyeOff,
-  CalendarPlus,
   UserPlus,
   Info,
   X,
@@ -42,6 +40,7 @@ import {
   generateId,
   getRemainingTimeInfo,
 } from "@/lib/format";
+import { StoreAccountDetailModal } from "@/components/StoreAccountDetailModal";
 
 interface SaasSettingsAdminViewProps {
   mode:
@@ -110,25 +109,12 @@ export function SaasSettingsAdminView({
   const [cashierDrafts, setCashierDrafts] = useState<
     { name: string; username: string; password: string }[]
   >([{ name: "", username: "", password: "" }]);
+  const [selectedParentOwnerId, setSelectedParentOwnerId] =
+    useState<string>("");
   const [accError, setAccError] = useState<string | null>(null);
-  const [visiblePasswords, setVisiblePasswords] = useState<
-    Record<string, boolean>
-  >({});
 
-  // Add Kasir Modal for an existing Owner row ("+ Tambahkan Kasir" replacing "Masuk")
-  const [addCashierOwnerTarget, setAddCashierOwnerTarget] =
-    useState<ManagedAccount | null>(null);
-  const [extraCashierName, setExtraCashierName] = useState("");
-  const [extraCashierUsername, setExtraCashierUsername] = useState("");
-  const [extraCashierPassword, setExtraCashierPassword] = useState("");
-  const [extraCashierError, setExtraCashierError] = useState<string | null>(
-    null
-  );
-
-  // Extend Duration Modal
-  const [extendTargetAccount, setExtendTargetAccount] =
-    useState<ManagedAccount | null>(null);
-  const [extendMonths, setExtendMonths] = useState<number>(1);
+  // Selected Owner for Eye Icon Detail Modal
+  const [detailOwner, setDetailOwner] = useState<ManagedAccount | null>(null);
 
   // Handle QRIS image upload to Base64 Data URL
   const handleQrisFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1256,6 +1242,8 @@ export function SaasSettingsAdminView({
     setAccEmail("");
     setAccDurationMonths(12);
     setCashierDrafts([{ name: "", username: "", password: "" }]);
+    const firstOwner = accounts.find((a) => a.role === "OWNER");
+    setSelectedParentOwnerId(firstOwner?.id || "");
     setShowAccountModal(true);
   };
 
@@ -1351,6 +1339,9 @@ export function SaasSettingsAdminView({
 
       onCreateAccountsBatch(createdBatch);
     } else {
+      const parentOwner = accounts.find(
+        (a) => a.role === "OWNER" && a.id === selectedParentOwnerId
+      );
       const newCashier: ManagedAccount = {
         id: generateId("acc"),
         name: accName.trim(),
@@ -1358,10 +1349,11 @@ export function SaasSettingsAdminView({
         password: accPassword,
         email: accEmail.trim() || "-",
         role: "CASHIER",
-        storeName: storeLabel,
-        durationMonths: months,
+        parentOwnerId: parentOwner?.id,
+        storeName: parentOwner ? parentOwner.storeName : storeLabel,
+        durationMonths: parentOwner ? parentOwner.durationMonths : months,
         createdAt: nowIso,
-        expiresAt: expiresIso,
+        expiresAt: parentOwner ? parentOwner.expiresAt : expiresIso,
         status: "AKTIF",
         avatarColor: "#0EA5E9",
         lastLogin: "Belum pernah login",
@@ -1370,52 +1362,6 @@ export function SaasSettingsAdminView({
     }
 
     setShowAccountModal(false);
-  };
-
-  const handleAddExtraCashierForOwnerSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!addCashierOwnerTarget) return;
-    setExtraCashierError(null);
-
-    if (
-      !extraCashierName.trim() ||
-      !extraCashierUsername.trim() ||
-      !extraCashierPassword.trim()
-    ) {
-      setExtraCashierError(
-        "Nama, Username, dan Password kasir wajib diisi."
-      );
-      return;
-    }
-
-    const uname = extraCashierUsername.trim().toLowerCase();
-    if (accounts.some((a) => a.username.toLowerCase() === uname)) {
-      setExtraCashierError(`Username "${extraCashierUsername}" sudah terdaftar.`);
-      return;
-    }
-
-    const newCashier: ManagedAccount = {
-      id: generateId("acc"),
-      name: extraCashierName.trim(),
-      username: uname,
-      password: extraCashierPassword,
-      email: "-",
-      role: "CASHIER",
-      parentOwnerId: addCashierOwnerTarget.id,
-      storeName: addCashierOwnerTarget.storeName,
-      durationMonths: addCashierOwnerTarget.durationMonths,
-      createdAt: new Date().toISOString(),
-      expiresAt: addCashierOwnerTarget.expiresAt,
-      status: "AKTIF",
-      avatarColor: "#0EA5E9",
-      lastLogin: "Belum pernah login",
-    };
-
-    onCreateAccountsBatch([newCashier]);
-    setExtraCashierName("");
-    setExtraCashierUsername("");
-    setExtraCashierPassword("");
-    setAddCashierOwnerTarget(null);
   };
 
   return (
@@ -1514,15 +1460,15 @@ export function SaasSettingsAdminView({
         </div>
       </div>
 
-      {/* Accounts Table */}
+      {/* Accounts Table (Sama dengan Catatan Langganan: Nama Toko | Type Akun | Mulai Langganan | Jenis Durasi | Sisa Waktu | Icon Mata) */}
       <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-card space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-base sm:text-lg font-extrabold text-navy-800">
-              Daftar Akun Owner & Kasir KELOKRA
+              Daftar Semua Akun Toko & Langganan KELOKRA
             </h2>
             <p className="text-xs text-slate-500">
-              Memantau durasi langganan akun (bulan/tahun) dan keterangan tinggal berapa lama lagi waktunya.
+              Klik ikon mata (<Eye className="w-3.5 h-3.5 inline text-emerald-600" />) untuk melihat detail akun Owner & Kasir, memperpanjang, menghapus, atau menambah kasir.
             </p>
           </div>
           <button
@@ -1530,17 +1476,17 @@ export function SaasSettingsAdminView({
             className="px-4 py-2 rounded-xl bg-emerald-50 text-emerald-700 hover:bg-emerald-100 text-xs font-bold flex items-center gap-1.5"
           >
             <Plus className="w-4 h-4" />
-            <span>Tambah Akun Baru</span>
+            <span>Buat Akun Baru</span>
           </button>
         </div>
 
-        {accounts.length === 0 ? (
+        {accounts.filter((a) => a.role === "OWNER").length === 0 ? (
           <div className="py-12 text-center space-y-3 border border-dashed border-slate-200 rounded-2xl">
             <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto">
               <UserPlus className="w-6 h-6" />
             </div>
             <p className="text-sm font-bold text-navy-800">
-              Belum ada akun Owner maupun Kasir yang dibuat
+              Belum ada akun Owner yang dibuat
             </p>
             <p className="text-xs text-slate-500 max-w-md mx-auto">
               Klik tombol <b>+ Buat Akun (Owner / Kasir)</b> untuk membuat akun Owner (<b>Owner + Kasir</b> atau <b>Owner Include Kasir</b>) beserta durasi masa aktifnya.
@@ -1551,157 +1497,83 @@ export function SaasSettingsAdminView({
             <table className="w-full text-left border-collapse text-sm">
               <thead>
                 <tr className="border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase">
-                  <th className="py-3 px-3">Nama & Toko</th>
-                  <th className="py-3 px-3">Role & Tipe</th>
-                  <th className="py-3 px-3">Username & Password</th>
-                  <th className="py-3 px-3">Durasi Dipilih</th>
-                  <th className="py-3 px-3">Sisa Waktu (Countdown)</th>
-                  <th className="py-3 px-3">Status</th>
-                  <th className="py-3 px-3 text-right">Aksi</th>
+                  <th className="py-3 px-3">Nama Toko</th>
+                  <th className="py-3 px-3">Type Akun</th>
+                  <th className="py-3 px-3">Mulai Langganan</th>
+                  <th className="py-3 px-3">Jenis Durasi</th>
+                  <th className="py-3 px-3">Sisa Waktu</th>
+                  <th className="py-3 px-3 text-right">Detail</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {accounts.map((acc) => {
-                  const timeInfo = getRemainingTimeInfo(acc.expiresAt);
-                  const showPwd = !!visiblePasswords[acc.id];
-                  return (
-                    <tr key={acc.id} className="hover:bg-slate-50/80">
-                      <td className="py-3.5 px-3">
-                        <p className="font-extrabold text-navy-800">
-                          {acc.name}
-                        </p>
-                        <p className="text-xs text-slate-500">{acc.storeName}</p>
-                      </td>
-                      <td className="py-3.5 px-3">
-                        <div className="flex flex-col items-start gap-1">
+                {accounts
+                  .filter((a) => a.role === "OWNER")
+                  .map((acc) => {
+                    const timeInfo = getRemainingTimeInfo(acc.expiresAt);
+                    const isYearly = acc.durationMonths >= 12;
+                    return (
+                      <tr key={acc.id} className="hover:bg-slate-50/80">
+                        <td className="py-3.5 px-3">
+                          <p className="font-extrabold text-navy-800">
+                            {acc.storeName}
+                          </p>
+                        </td>
+                        <td className="py-3.5 px-3 text-xs font-bold">
                           <span
-                            className={`px-2.5 py-1 rounded-lg text-xs font-extrabold ${
-                              acc.role === "OWNER"
+                            className={`px-2.5 py-1 rounded-lg ${
+                              acc.ownerMode === "OWNER_INCLUDE_KASIR"
+                                ? "bg-purple-50 text-purple-700"
+                                : "bg-emerald-50 text-emerald-700"
+                            }`}
+                          >
+                            {acc.ownerMode === "OWNER_INCLUDE_KASIR"
+                              ? "Owner Include Kasir"
+                              : "Owner + Kasir"}
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-3 text-xs text-slate-600">
+                          {formatDateOnly(acc.createdAt)}
+                        </td>
+                        <td className="py-3.5 px-3 text-xs font-bold">
+                          <span
+                            className={`px-2.5 py-1 rounded-lg ${
+                              isYearly
                                 ? "bg-emerald-500 text-white"
                                 : "bg-sky-500 text-white"
                             }`}
                           >
-                            {acc.role === "OWNER" ? "Owner" : "Kasir"}
+                            {isYearly
+                              ? `Tahunan (${acc.durationMonths} Bln)`
+                              : `Bulanan (${acc.durationMonths} Bln)`}
                           </span>
-                          {acc.role === "OWNER" && (
-                            <span className="text-[10px] font-bold text-slate-500">
-                              {acc.ownerMode === "OWNER_INCLUDE_KASIR"
-                                ? "Owner Include Kasir"
-                                : "Owner + Kasir"}
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="py-3.5 px-3 text-xs">
-                        <p className="font-mono font-bold text-navy-800">
-                          @{acc.username}
-                        </p>
-                        <div className="flex items-center gap-1.5 text-slate-500 mt-0.5">
-                          <span className="font-mono">
-                            {showPwd ? acc.password : "••••••••"}
+                        </td>
+                        <td className="py-3.5 px-3">
+                          <span
+                            className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-extrabold ${
+                              timeInfo.isExpired
+                                ? "bg-rose-100 text-rose-700"
+                                : timeInfo.isExpiringSoon
+                                ? "bg-amber-100 text-amber-800"
+                                : "bg-emerald-50 text-emerald-700"
+                            }`}
+                          >
+                            <Clock className="w-3.5 h-3.5" />
+                            <span>{timeInfo.label}</span>
                           </span>
+                        </td>
+                        <td className="py-3.5 px-3 text-right">
                           <button
                             type="button"
-                            onClick={() =>
-                              setVisiblePasswords((prev) => ({
-                                ...prev,
-                                [acc.id]: !prev[acc.id],
-                              }))
-                            }
-                            className="text-slate-400 hover:text-navy-800"
+                            onClick={() => setDetailOwner(acc)}
+                            title="Lihat Detail Akun Owner & Kasir"
+                            className="p-2 rounded-xl border border-slate-200 hover:border-emerald-500 hover:bg-emerald-50 text-navy-800 hover:text-emerald-700 inline-flex items-center justify-center transition"
                           >
-                            {showPwd ? (
-                              <EyeOff className="w-3.5 h-3.5" />
-                            ) : (
-                              <Eye className="w-3.5 h-3.5" />
-                            )}
+                            <Eye className="w-4 h-4" />
                           </button>
-                        </div>
-                      </td>
-                      <td className="py-3.5 px-3 text-xs">
-                        <p className="font-bold text-navy-800">
-                          {acc.durationMonths === 12
-                            ? "1 Tahun (12 Bulan)"
-                            : `${acc.durationMonths} Bulan`}
-                        </p>
-                        <p className="text-[11px] text-slate-400">
-                          s/d {formatDateOnly(acc.expiresAt)}
-                        </p>
-                      </td>
-                      <td className="py-3.5 px-3">
-                        <span
-                          className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-extrabold ${
-                            timeInfo.isExpired
-                              ? "bg-rose-100 text-rose-700"
-                              : timeInfo.isExpiringSoon
-                              ? "bg-amber-100 text-amber-800"
-                              : "bg-emerald-50 text-emerald-700"
-                          }`}
-                        >
-                          <Clock className="w-3.5 h-3.5" />
-                          <span>{timeInfo.label}</span>
-                        </span>
-                      </td>
-                      <td className="py-3.5 px-3">
-                        <button
-                          type="button"
-                          onClick={() => onToggleAccountStatus(acc.id)}
-                          className={`px-2.5 py-1 rounded-full text-xs font-bold ${
-                            acc.status === "AKTIF" && !timeInfo.isExpired
-                              ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                              : "bg-slate-200 text-slate-600"
-                          }`}
-                        >
-                          {acc.status === "AKTIF" && !timeInfo.isExpired
-                            ? "Aktif"
-                            : "Nonaktif"}
-                        </button>
-                      </td>
-                      <td className="py-3.5 px-3 text-right">
-                        <div className="inline-flex items-center gap-1.5">
-                          {acc.role === "OWNER" &&
-                            acc.ownerMode !== "OWNER_INCLUDE_KASIR" && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setExtraCashierError(null);
-                                  setExtraCashierName("");
-                                  setExtraCashierUsername("");
-                                  setExtraCashierPassword("");
-                                  setAddCashierOwnerTarget(acc);
-                                }}
-                                title="Tambahkan Akun Kasir untuk Toko Ini"
-                                className="px-2.5 py-1.5 rounded-lg bg-navy-800 hover:bg-emerald-600 text-white text-[11px] font-bold inline-flex items-center gap-1 transition"
-                              >
-                                <Plus className="w-3.5 h-3.5" />
-                                <span>Tambahkan Kasir</span>
-                              </button>
-                            )}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setExtendTargetAccount(acc);
-                              setExtendMonths(1);
-                            }}
-                            title="Perpanjang Waktu Aktif"
-                            className="px-2.5 py-1.5 rounded-lg border border-emerald-500 text-emerald-700 hover:bg-emerald-50 text-[11px] font-bold inline-flex items-center gap-1"
-                          >
-                            <CalendarPlus className="w-3 h-3" />
-                            <span>Perpanjang</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onDeleteAccount(acc.id)}
-                            title="Hapus Akun"
-                            className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-50"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
+                        </td>
+                      </tr>
+                    );
+                  })}
               </tbody>
             </table>
           </div>
@@ -1801,6 +1673,34 @@ export function SaasSettingsAdminView({
                   </div>
                 </div>
               )}
+
+              {accRole === "CASHIER" &&
+                accounts.some((a) => a.role === "OWNER") && (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      Hubungkan ke Toko / Owner
+                    </label>
+                    <select
+                      value={selectedParentOwnerId}
+                      onChange={(e) => {
+                        setSelectedParentOwnerId(e.target.value);
+                        const found = accounts.find(
+                          (a) => a.id === e.target.value
+                        );
+                        if (found) setAccStoreName(found.storeName);
+                      }}
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-xs sm:text-sm"
+                    >
+                      {accounts
+                        .filter((a) => a.role === "OWNER")
+                        .map((o) => (
+                          <option key={o.id} value={o.id}>
+                            {o.storeName} (Owner: {o.name})
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                )}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
@@ -2064,190 +1964,16 @@ export function SaasSettingsAdminView({
         </div>
       )}
 
-      {/* MODAL TAMBAHKAN KASIR UNTUK OWNER (Pengganti tombol Masuk di tabel) */}
-      {addCashierOwnerTarget && (
-        <div className="fixed inset-0 z-50 bg-navy-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <div>
-                <h3 className="text-lg font-extrabold text-navy-800">
-                  Tambahkan Akun Kasir
-                </h3>
-                <p className="text-xs text-slate-500">
-                  Toko: <b>{addCashierOwnerTarget.storeName}</b> (Owner:{" "}
-                  {addCashierOwnerTarget.name})
-                </p>
-              </div>
-              <button
-                onClick={() => setAddCashierOwnerTarget(null)}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-600"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form
-              onSubmit={handleAddExtraCashierForOwnerSubmit}
-              className="space-y-3.5 text-sm"
-            >
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Nama Kasir
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={extraCashierName}
-                  onChange={(e) => setExtraCashierName(e.target.value)}
-                  placeholder="Contoh: Siti Kasir"
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Username Login Kasir
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={extraCashierUsername}
-                  onChange={(e) => setExtraCashierUsername(e.target.value)}
-                  placeholder="Contoh: siti.kasir"
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Password Login Kasir
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={extraCashierPassword}
-                  onChange={(e) => setExtraCashierPassword(e.target.value)}
-                  placeholder="Minimal 4 karakter"
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200"
-                />
-              </div>
-
-              <div className="p-3 rounded-xl bg-emerald-50 text-[11px] font-semibold text-emerald-800">
-                Masa aktif kasir mengikuti Owner hingga{" "}
-                <b>{formatDateOnly(addCashierOwnerTarget.expiresAt)}</b>.
-              </div>
-
-              {extraCashierError && (
-                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs font-bold text-rose-600">
-                  {extraCashierError}
-                </div>
-              )}
-
-              <div className="flex gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setAddCashierOwnerTarget(null)}
-                  className="flex-1 py-2.5 rounded-xl border border-slate-200 font-bold text-slate-600"
-                >
-                  Batal
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-bold"
-                >
-                  + Tambahkan Kasir
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL PERPANJANG MASA AKTIF AKUN */}
-      {extendTargetAccount && (
-        <div className="fixed inset-0 z-50 bg-navy-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h3 className="text-lg font-extrabold text-navy-800">
-                Perpanjang Masa Aktif Akun
-              </h3>
-              <button
-                onClick={() => setExtendTargetAccount(null)}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-600"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <div className="text-xs text-slate-600 space-y-1">
-              <p>
-                Akun: <b>{extendTargetAccount.name}</b> (@
-                {extendTargetAccount.username})
-              </p>
-              <p>
-                Berakhir saat ini:{" "}
-                <b>{formatDateOnly(extendTargetAccount.expiresAt)}</b> (
-                {getRemainingTimeInfo(extendTargetAccount.expiresAt).label})
-              </p>
-            </div>
-
-            <div className="grid grid-cols-4 gap-2">
-              {[
-                { label: "+1 Bln", val: 1 },
-                { label: "+3 Bln", val: 3 },
-                { label: "+6 Bln", val: 6 },
-                { label: "+1 Thn", val: 12 },
-              ].map((p) => (
-                <button
-                  key={p.val}
-                  type="button"
-                  onClick={() => setExtendMonths(p.val)}
-                  className={`py-2 rounded-xl border text-xs font-bold ${
-                    extendMonths === p.val
-                      ? "bg-emerald-500 text-white border-emerald-500"
-                      : "bg-slate-50 border-slate-200 text-navy-800"
-                  }`}
-                >
-                  {p.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="flex items-center gap-2 text-xs">
-              <input
-                type="number"
-                min={1}
-                value={extendMonths}
-                onChange={(e) => setExtendMonths(Number(e.target.value))}
-                className="w-24 px-3 py-2 rounded-xl border border-slate-200 font-bold text-center"
-              />
-              <span className="text-slate-600">Bulan tambahan</span>
-            </div>
-
-            <div className="flex gap-3 pt-2">
-              <button
-                type="button"
-                onClick={() => setExtendTargetAccount(null)}
-                className="flex-1 py-2.5 rounded-xl border border-slate-200 font-bold text-slate-600"
-              >
-                Batal
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  onExtendAccount(
-                    extendTargetAccount.id,
-                    Math.max(1, extendMonths || 1)
-                  );
-                  setExtendTargetAccount(null);
-                }}
-                className="flex-1 py-2.5 rounded-xl bg-emerald-500 text-white font-bold"
-              >
-                Simpan Perpanjangan
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* MODAL DETAIL AKUN OWNER & KASIR (Icon Mata) */}
+      <StoreAccountDetailModal
+        ownerAccount={detailOwner}
+        allAccounts={accounts}
+        onClose={() => setDetailOwner(null)}
+        onCreateAccountsBatch={onCreateAccountsBatch}
+        onExtendAccount={onExtendAccount}
+        onToggleAccountStatus={onToggleAccountStatus}
+        onDeleteAccount={onDeleteAccount}
+      />
     </div>
   );
 }
