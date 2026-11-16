@@ -2,9 +2,9 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "NEXTPOS — Modern Multi-Tenant SaaS Point of Sale",
+  title: "KELOKRA — Modern Multi-Tenant SaaS Point of Sale",
   description:
-    "Platform Kasir SaaS Multi-Tenant Modern untuk berbagai jenis dan skala usaha. Mendukung POS Cepat, QRIS, Inventaris, HPP, Laporan Laba, dan Mode Offline PWA.",
+    "Platform Kasir SaaS Multi-Tenant Modern KELOKRA untuk berbagai jenis dan skala usaha. Mendukung POS Cepat, QRIS, Inventaris, HPP, Laporan Laba, dan Mode Offline PWA.",
   manifest: "/manifest.json",
   icons: {
     icon: "/icon.svg",

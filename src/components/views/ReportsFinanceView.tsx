@@ -73,31 +73,57 @@ export function ReportsFinanceView({
   const [shiftCashAmount, setShiftCashAmount] = useState(500000);
   const [shiftNotes, setShiftNotes] = useState("Setoran kas kasir");
 
-  // Financial calculations per Chapter 9.1
-  const extraGrossSales = sales
-    .slice(3)
-    .reduce((sum, s) => sum + s.subtotal, 0);
-  const extraDiscounts = sales
-    .slice(3)
-    .reduce((sum, s) => sum + s.discountTotal, 0);
-  const extraHpp = sales.slice(3).reduce((sum, s) => sum + s.totalHpp, 0);
-
-  const grossSales = 46500000 + extraGrossSales;
-  const totalDiscount = 980000 + extraDiscounts;
-  const customerReturnsTotal =
-    200000 +
-    returns
-      .filter((r) => r.type === "CUSTOMER_RETURN")
-      .reduce((s, r) => s + r.refundAmount, 0);
+  // Perhitungan 100% dari data riil (tanpa angka dummy)
+  const completedSales = sales.filter((s) => s.status === "COMPLETED");
+  const grossSales = completedSales.reduce((sum, s) => sum + s.subtotal, 0);
+  const totalDiscount = completedSales.reduce(
+    (sum, s) => sum + s.discountTotal,
+    0
+  );
+  const customerReturnsTotal = returns
+    .filter((r) => r.type === "CUSTOMER_RETURN")
+    .reduce((s, r) => s + r.refundAmount, 0);
 
   // Omzet Bersih = Penjualan - Diskon - Retur Penjualan
-  const omzetBersih = grossSales - totalDiscount - customerReturnsTotal;
-  const totalHpp = 13140000 + extraHpp;
+  const omzetBersih = Math.max(
+    0,
+    grossSales - totalDiscount - customerReturnsTotal
+  );
+  const totalHpp = completedSales.reduce((sum, s) => sum + s.totalHpp, 0);
   // Laba Kotor = Omzet Bersih - HPP
   const labaKotor = omzetBersih - totalHpp;
   const totalExpenses = expenses.reduce((sum, e) => sum + e.amount, 0);
   // Laba Operasional = Laba Kotor - Pengeluaran Operasional
   const labaOperasional = labaKotor - totalExpenses;
+
+  const bestProduct = [...products]
+    .filter((p) => p.soldCount > 0)
+    .sort((a, b) => b.soldCount - a.soldCount)[0];
+
+  const avgTransaction =
+    completedSales.length > 0
+      ? Math.round(omzetBersih / completedSales.length)
+      : 0;
+
+  const dayMap = ["Min", "Sen", "Sel", "Rab", "Kam", "Jum", "Sab"];
+  const dynamicWeeklyChart = WEEKLY_REPORT_CHART.map((d) => {
+    const daySales = completedSales
+      .filter((tx) => dayMap[new Date(tx.createdAt).getDay()] === d.day)
+      .reduce((s, tx) => s + tx.grandTotal, 0);
+    const dayProfit = completedSales
+      .filter((tx) => dayMap[new Date(tx.createdAt).getDay()] === d.day)
+      .reduce((s, tx) => s + tx.netProfit, 0);
+    return {
+      day: d.day,
+      sales: daySales,
+      profit: dayProfit,
+    };
+  });
+
+  const maxWeeklyVal = Math.max(
+    ...dynamicWeeklyChart.map((d) => Math.max(d.sales, d.profit)),
+    100000
+  );
 
   const handleExportCsv = () => {
     const headers = [
@@ -107,31 +133,34 @@ export function ReportsFinanceView({
       (s) =>
         `${s.invoiceNumber},${s.createdAt},"${s.customerName}","${s.cashierName}",${s.paymentMethod},${s.subtotal},${s.discountTotal},${s.grandTotal},${s.totalHpp},${s.netProfit}`
     );
-    const csvContent = "data:text/csv;charset=utf-8," + [headers, ...rows].join("\n");
+    const csvContent =
+      "data:text/csv;charset=utf-8," + [headers, ...rows].join("\n");
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `Laporan-NEXTPOS-${new Date().toISOString().slice(0, 10)}.csv`);
+    link.setAttribute(
+      "download",
+      `Laporan-KELOKRA-${new Date().toISOString().slice(0, 10)}.csv`
+    );
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
   // ============================================================================
-  // MODE 1: LAPORAN & ANALITIK (Matches Middle-Center Mockup Screen)
+  // MODE 1: LAPORAN & ANALITIK
   // ============================================================================
   if (mode === "reports") {
     return (
       <div className="space-y-6">
         <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-card space-y-6">
-          {/* Header */}
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
               <h1 className="text-xl sm:text-2xl font-extrabold text-navy-800">
                 Laporan & Analitik
               </h1>
               <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
-                Perhitungan otomatis Omzet Bersih, Snapshot HPP, dan Laba Operasional (Bab 9.1).
+                Perhitungan otomatis Omzet Bersih, Snapshot HPP, dan Laba Operasional KELOKRA.
               </p>
             </div>
 
@@ -145,7 +174,7 @@ export function ReportsFinanceView({
                 <option value="7 Hari Terakhir">7 Hari Terakhir</option>
                 <option value="Hari Ini">Hari Ini</option>
                 <option value="30 Hari Terakhir">30 Hari Terakhir</option>
-                <option value="Bulan Ini">Bulan Ini (Nov 2026)</option>
+                <option value="Bulan Ini">Bulan Ini</option>
               </select>
 
               <button
@@ -166,7 +195,6 @@ export function ReportsFinanceView({
             </div>
           </div>
 
-          {/* Sub-Tabs matching Mockup: Penjualan | Produk | Pelanggan | Keuangan */}
           <div className="flex items-center gap-6 border-b border-slate-200 text-sm font-bold">
             {(["Penjualan", "Produk", "Pelanggan", "Keuangan"] as const).map(
               (tab) => {
@@ -188,7 +216,6 @@ export function ReportsFinanceView({
             )}
           </div>
 
-          {/* Grafik Penjualan Bar Chart + Right Totals matching Mockup */}
           {reportTab === "Penjualan" && (
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
               <div className="lg:col-span-8 p-4 rounded-2xl bg-slate-50/60 border border-slate-100">
@@ -208,11 +235,16 @@ export function ReportsFinanceView({
                   </div>
                 </div>
 
-                {/* Bar Chart Sen - Min */}
                 <div className="grid grid-cols-7 gap-3 items-end h-48 pt-6 px-2">
-                  {WEEKLY_REPORT_CHART.map((d) => {
-                    const salesHeightPct = Math.round((d.sales / 8000000) * 100);
-                    const profitHeightPct = Math.round((d.profit / 8000000) * 100);
+                  {dynamicWeeklyChart.map((d) => {
+                    const salesHeightPct = Math.max(
+                      4,
+                      Math.round((d.sales / maxWeeklyVal) * 100)
+                    );
+                    const profitHeightPct = Math.max(
+                      4,
+                      Math.round((d.profit / maxWeeklyVal) * 100)
+                    );
                     return (
                       <div
                         key={d.day}
@@ -239,7 +271,6 @@ export function ReportsFinanceView({
                 </div>
               </div>
 
-              {/* Right KPI Totals matching Mockup */}
               <div className="lg:col-span-4 space-y-4">
                 <div className="p-5 rounded-2xl border border-slate-200/80 bg-white space-y-1">
                   <p className="text-xs font-medium text-slate-500">
@@ -249,7 +280,7 @@ export function ReportsFinanceView({
                     {formatIDR(omzetBersih)}
                   </p>
                   <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-600">
-                    ↑ 14% dibanding minggu lalu
+                    {completedSales.length} transaksi selesai
                   </span>
                 </div>
 
@@ -261,43 +292,56 @@ export function ReportsFinanceView({
                     {formatIDR(labaKotor)}
                   </p>
                   <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-600">
-                    ↑ 16% dibanding minggu lalu
+                    Laba Operasional: {formatIDR(labaOperasional)}
                   </span>
                 </div>
               </div>
             </div>
           )}
 
-          {/* Tab Keuangan: Rumus Perhitungan Bab 9.1 */}
           {reportTab === "Keuangan" && (
             <div className="p-5 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-4">
               <h3 className="text-base font-extrabold text-navy-800">
-                Perhitungan Laba Rugi Standar NEXTPOS (Bab 9.1)
+                Perhitungan Laba Rugi Standar KELOKRA
               </h3>
               <div className="divide-y divide-slate-200/80 text-sm">
                 <div className="py-2.5 flex justify-between">
-                  <span className="text-slate-600">Penjualan Kotor (Gross Sales)</span>
-                  <span className="font-bold text-navy-800">{formatIDR(grossSales)}</span>
+                  <span className="text-slate-600">
+                    Penjualan Kotor (Gross Sales)
+                  </span>
+                  <span className="font-bold text-navy-800">
+                    {formatIDR(grossSales)}
+                  </span>
                 </div>
                 <div className="py-2.5 flex justify-between">
-                  <span className="text-slate-600">Dikurangi: Total Diskon Promo</span>
-                  <span className="font-bold text-rose-600">- {formatIDR(totalDiscount)}</span>
+                  <span className="text-slate-600">
+                    Dikurangi: Total Diskon Promo
+                  </span>
+                  <span className="font-bold text-rose-600">
+                    - {formatIDR(totalDiscount)}
+                  </span>
                 </div>
                 <div className="py-2.5 flex justify-between">
-                  <span className="text-slate-600">Dikurangi: Retur Penjualan Pelanggan</span>
+                  <span className="text-slate-600">
+                    Dikurangi: Retur Penjualan Pelanggan
+                  </span>
                   <span className="font-bold text-rose-600">
                     - {formatIDR(customerReturnsTotal)}
                   </span>
                 </div>
                 <div className="py-3 flex justify-between bg-emerald-50/60 px-3 rounded-xl font-extrabold text-navy-800">
                   <span>= Omzet Bersih (Penjualan − Diskon − Retur)</span>
-                  <span className="text-emerald-700">{formatIDR(omzetBersih)}</span>
+                  <span className="text-emerald-700">
+                    {formatIDR(omzetBersih)}
+                  </span>
                 </div>
                 <div className="py-2.5 flex justify-between">
                   <span className="text-slate-600">
                     Dikurangi: HPP (Snapshot Average Cost saat Transaksi)
                   </span>
-                  <span className="font-bold text-rose-600">- {formatIDR(totalHpp)}</span>
+                  <span className="font-bold text-rose-600">
+                    - {formatIDR(totalHpp)}
+                  </span>
                 </div>
                 <div className="py-3 flex justify-between bg-slate-100 px-3 rounded-xl font-extrabold text-navy-800">
                   <span>= Laba Kotor (Omzet Bersih − HPP)</span>
@@ -319,63 +363,85 @@ export function ReportsFinanceView({
             </div>
           )}
 
-          {reportTab === "Produk" && (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-sm">
-                <thead>
-                  <tr className="border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase">
-                    <th className="py-2.5 px-3">Produk</th>
-                    <th className="py-2.5 px-3">Terjual</th>
-                    <th className="py-2.5 px-3">Harga Jual</th>
-                    <th className="py-2.5 px-3">HPP Snapshot</th>
-                    <th className="py-2.5 px-3">Margin / Unit</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {products.slice(0, 6).map((p) => (
-                    <tr key={p.id}>
-                      <td className="py-2.5 px-3 font-bold text-navy-800">{p.name}</td>
-                      <td className="py-2.5 px-3">{p.soldCount} {p.unit}</td>
-                      <td className="py-2.5 px-3">{formatIDR(p.sellingPrice)}</td>
-                      <td className="py-2.5 px-3 text-slate-500">{formatIDR(p.purchasePrice)}</td>
-                      <td className="py-2.5 px-3 font-bold text-emerald-600">
-                        +{formatIDR(p.sellingPrice - p.purchasePrice)}
-                      </td>
+          {reportTab === "Produk" &&
+            (products.length === 0 ? (
+              <div className="py-8 text-center text-xs text-slate-400">
+                Belum ada data produk.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase">
+                      <th className="py-2.5 px-3">Produk</th>
+                      <th className="py-2.5 px-3">Terjual</th>
+                      <th className="py-2.5 px-3">Harga Jual</th>
+                      <th className="py-2.5 px-3">HPP Snapshot</th>
+                      <th className="py-2.5 px-3">Margin / Unit</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {products.map((p) => (
+                      <tr key={p.id}>
+                        <td className="py-2.5 px-3 font-bold text-navy-800">
+                          {p.name}
+                        </td>
+                        <td className="py-2.5 px-3">
+                          {p.soldCount} {p.unit}
+                        </td>
+                        <td className="py-2.5 px-3">
+                          {formatIDR(p.sellingPrice)}
+                        </td>
+                        <td className="py-2.5 px-3 text-slate-500">
+                          {formatIDR(p.purchasePrice)}
+                        </td>
+                        <td className="py-2.5 px-3 font-bold text-emerald-600">
+                          +{formatIDR(p.sellingPrice - p.purchasePrice)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ))}
 
-          {reportTab === "Pelanggan" && (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-sm">
-                <thead>
-                  <tr className="border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase">
-                    <th className="py-2.5 px-3">Nama Pelanggan</th>
-                    <th className="py-2.5 px-3">Frekuensi Belanja</th>
-                    <th className="py-2.5 px-3">Total Kontribusi Omzet</th>
-                    <th className="py-2.5 px-3">Poin Loyalitas</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {customers.map((c) => (
-                    <tr key={c.id}>
-                      <td className="py-2.5 px-3 font-bold text-navy-800">{c.name}</td>
-                      <td className="py-2.5 px-3">{c.totalTransactions}x Transaksi</td>
-                      <td className="py-2.5 px-3 font-bold text-emerald-600">
-                        {formatIDR(c.totalSpent)}
-                      </td>
-                      <td className="py-2.5 px-3">{c.loyaltyPoints} pts</td>
+          {reportTab === "Pelanggan" &&
+            (customers.length === 0 ? (
+              <div className="py-8 text-center text-xs text-slate-400">
+                Belum ada data pelanggan.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase">
+                      <th className="py-2.5 px-3">Nama Pelanggan</th>
+                      <th className="py-2.5 px-3">Frekuensi Belanja</th>
+                      <th className="py-2.5 px-3">Total Kontribusi Omzet</th>
+                      <th className="py-2.5 px-3">Poin Loyalitas</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {customers.map((c) => (
+                      <tr key={c.id}>
+                        <td className="py-2.5 px-3 font-bold text-navy-800">
+                          {c.name}
+                        </td>
+                        <td className="py-2.5 px-3">
+                          {c.totalTransactions}x Transaksi
+                        </td>
+                        <td className="py-2.5 px-3 font-bold text-emerald-600">
+                          {formatIDR(c.totalSpent)}
+                        </td>
+                        <td className="py-2.5 px-3">{c.loyaltyPoints} pts</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ))}
 
-          {/* Insight Penting Row matching Mockup */}
+          {/* Insight Penting Row */}
           <div className="space-y-3 pt-2">
             <h3 className="text-sm font-extrabold text-navy-800">
               Insight Penting
@@ -390,7 +456,7 @@ export function ReportsFinanceView({
                     Produk terlaris
                   </p>
                   <p className="text-sm font-extrabold text-navy-800">
-                    Kopi Susu Gula Aren
+                    {bestProduct ? bestProduct.name : "Belum ada data"}
                   </p>
                 </div>
               </div>
@@ -400,9 +466,13 @@ export function ReportsFinanceView({
                   <Clock className="w-5 h-5" />
                 </div>
                 <div>
-                  <p className="text-xs text-slate-500 font-medium">Jam ramai</p>
+                  <p className="text-xs text-slate-500 font-medium">
+                    Status Transaksi
+                  </p>
                   <p className="text-sm font-extrabold text-navy-800">
-                    14.00 - 16.00
+                    {completedSales.length > 0
+                      ? `${completedSales.length} Transaksi Aktif`
+                      : "Belum ada transaksi"}
                   </p>
                 </div>
               </div>
@@ -416,7 +486,7 @@ export function ReportsFinanceView({
                     Rata-rata transaksi
                   </p>
                   <p className="text-sm font-extrabold text-navy-800">
-                    Rp 78.000
+                    {formatIDR(avgTransaction)}
                   </p>
                 </div>
               </div>
@@ -435,9 +505,7 @@ export function ReportsFinanceView({
 
     return (
       <div className="space-y-6">
-        {/* Top Row: Cash Shift Status + Expense Summary */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Cash Shift Card */}
           <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-card space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2.5">
@@ -503,7 +571,6 @@ export function ReportsFinanceView({
             )}
           </div>
 
-          {/* Operational Expenses Summary Card */}
           <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-card flex flex-col justify-between space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2.5">
@@ -544,38 +611,48 @@ export function ReportsFinanceView({
           <h3 className="text-base font-extrabold text-navy-800">
             Daftar Pengeluaran Operasional
           </h3>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-sm">
-              <thead>
-                <tr className="border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase">
-                  <th className="py-2.5 px-3">Tanggal</th>
-                  <th className="py-2.5 px-3">Kategori</th>
-                  <th className="py-2.5 px-3">Keterangan Biaya</th>
-                  <th className="py-2.5 px-3">Dicatat Oleh</th>
-                  <th className="py-2.5 px-3">Nominal</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {expenses.map((exp) => (
-                  <tr key={exp.id}>
-                    <td className="py-3 px-3 text-xs text-slate-500">{exp.date}</td>
-                    <td className="py-3 px-3">
-                      <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-slate-100 text-navy-800">
-                        {exp.category}
-                      </span>
-                    </td>
-                    <td className="py-3 px-3 font-semibold text-navy-800">
-                      {exp.description}
-                    </td>
-                    <td className="py-3 px-3 text-slate-600">{exp.recordedBy}</td>
-                    <td className="py-3 px-3 font-bold text-rose-600">
-                      {formatIDR(exp.amount)}
-                    </td>
+          {expenses.length === 0 ? (
+            <div className="py-10 text-center text-xs text-slate-400 border border-dashed border-slate-200 rounded-2xl">
+              Belum ada pengeluaran operasional yang dicatat.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase">
+                    <th className="py-2.5 px-3">Tanggal</th>
+                    <th className="py-2.5 px-3">Kategori</th>
+                    <th className="py-2.5 px-3">Keterangan Biaya</th>
+                    <th className="py-2.5 px-3">Dicatat Oleh</th>
+                    <th className="py-2.5 px-3">Nominal</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {expenses.map((exp) => (
+                    <tr key={exp.id}>
+                      <td className="py-3 px-3 text-xs text-slate-500">
+                        {exp.date}
+                      </td>
+                      <td className="py-3 px-3">
+                        <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-slate-100 text-navy-800">
+                          {exp.category}
+                        </span>
+                      </td>
+                      <td className="py-3 px-3 font-semibold text-navy-800">
+                        {exp.description}
+                      </td>
+                      <td className="py-3 px-3 text-slate-600">
+                        {exp.recordedBy}
+                      </td>
+                      <td className="py-3 px-3 font-bold text-rose-600">
+                        {formatIDR(exp.amount)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
 
         {/* MODAL CATAT PENGELUARAN */}
@@ -602,8 +679,8 @@ export function ReportsFinanceView({
                     category: expCategory,
                     description: expDesc.trim(),
                     amount: Number(expAmount),
-                    date: "16 Nov 2026",
-                    recordedBy: "Andi Pratama",
+                    date: new Date().toLocaleDateString("id-ID"),
+                    recordedBy: "Owner",
                   });
                   setExpDesc("");
                   setShowExpenseModal(false);
@@ -617,7 +694,9 @@ export function ReportsFinanceView({
                   <select
                     value={expCategory}
                     onChange={(e) =>
-                      setExpCategory(e.target.value as ExpenseRecord["category"])
+                      setExpCategory(
+                        e.target.value as ExpenseRecord["category"]
+                      )
                     }
                     className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white"
                   >
@@ -637,7 +716,7 @@ export function ReportsFinanceView({
                     required
                     value={expDesc}
                     onChange={(e) => setExpDesc(e.target.value)}
-                    placeholder="Misal: Beli Galon Air & Sabun Cuci"
+                    placeholder="Masukkan keterangan pengeluaran..."
                     className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200"
                   />
                 </div>
@@ -774,38 +853,46 @@ export function ReportsFinanceView({
           </button>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse text-sm">
-            <thead>
-              <tr className="border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase">
-                <th className="py-3 px-3">Nama Pelanggan</th>
-                <th className="py-3 px-3">No. WhatsApp</th>
-                <th className="py-3 px-3">Email</th>
-                <th className="py-3 px-3">Total Transaksi</th>
-                <th className="py-3 px-3">Total Belanja</th>
-                <th className="py-3 px-3">Kunjungan Terakhir</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {customers.map((c) => (
-                <tr key={c.id} className="hover:bg-slate-50/80">
-                  <td className="py-3 px-3 font-bold text-navy-800">{c.name}</td>
-                  <td className="py-3 px-3 text-slate-600">{c.phone}</td>
-                  <td className="py-3 px-3 text-slate-500">{c.email}</td>
-                  <td className="py-3 px-3 font-semibold">
-                    {c.totalTransactions}x
-                  </td>
-                  <td className="py-3 px-3 font-bold text-emerald-600">
-                    {formatIDR(c.totalSpent)}
-                  </td>
-                  <td className="py-3 px-3 text-xs text-slate-500">
-                    {c.lastVisit}
-                  </td>
+        {customers.length === 0 ? (
+          <div className="py-10 text-center text-xs text-slate-400 border border-dashed border-slate-200 rounded-2xl">
+            Belum ada pelanggan terdaftar. Klik tombol <b>+ Tambah Pelanggan</b> untuk mulai menyimpan data pelanggan.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase">
+                  <th className="py-3 px-3">Nama Pelanggan</th>
+                  <th className="py-3 px-3">No. WhatsApp</th>
+                  <th className="py-3 px-3">Email</th>
+                  <th className="py-3 px-3">Total Transaksi</th>
+                  <th className="py-3 px-3">Total Belanja</th>
+                  <th className="py-3 px-3">Kunjungan Terakhir</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {customers.map((c) => (
+                  <tr key={c.id} className="hover:bg-slate-50/80">
+                    <td className="py-3 px-3 font-bold text-navy-800">
+                      {c.name}
+                    </td>
+                    <td className="py-3 px-3 text-slate-600">{c.phone}</td>
+                    <td className="py-3 px-3 text-slate-500">{c.email}</td>
+                    <td className="py-3 px-3 font-semibold">
+                      {c.totalTransactions}x
+                    </td>
+                    <td className="py-3 px-3 font-bold text-emerald-600">
+                      {formatIDR(c.totalSpent)}
+                    </td>
+                    <td className="py-3 px-3 text-xs text-slate-500">
+                      {c.lastVisit}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {showCustModal && (
@@ -829,12 +916,12 @@ export function ReportsFinanceView({
                 onAddCustomer({
                   id: generateId("cust"),
                   name: custName.trim(),
-                  phone: custPhone.trim() || "0812-0000-0000",
-                  email: custEmail.trim() || "pelanggan@email.com",
-                  totalTransactions: 1,
+                  phone: custPhone.trim() || "-",
+                  email: custEmail.trim() || "-",
+                  totalTransactions: 0,
                   totalSpent: 0,
-                  lastVisit: "16 Nov 2026",
-                  loyaltyPoints: 10,
+                  lastVisit: new Date().toLocaleDateString("id-ID"),
+                  loyaltyPoints: 0,
                 });
                 setCustName("");
                 setCustPhone("");

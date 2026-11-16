@@ -19,6 +19,7 @@ import {
   Tag,
   WifiOff,
   History,
+  PackagePlus,
   X,
 } from "lucide-react";
 import {
@@ -41,6 +42,7 @@ interface PosViewProps {
   isOnline: boolean;
   cashierName: string;
   onCompleteSale: (sale: SaleTransaction) => void;
+  onNavigate?: (menu: string) => void;
 }
 
 export function PosView({
@@ -50,34 +52,29 @@ export function PosView({
   isOnline,
   cashierName,
   onCompleteSale,
+  onNavigate,
 }: PosViewProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string>("Semua");
-  const [selectedCustomer, setSelectedCustomer] = useState<string>("Pelanggan Umum");
+  const [selectedCustomer, setSelectedCustomer] =
+    useState<string>("Pelanggan Umum");
 
-  // Pre-populate cart with the 3 mockup items (Kopi Susu x1, Es Teh Manis x1, Roti Cokelat x1, Diskon Rp 2.000 -> Total Rp 26.000)
-  const [cart, setCart] = useState<CartItem[]>(() => {
-    const p1 = products.find((p) => p.id === "prod-1");
-    const p2 = products.find((p) => p.id === "prod-2");
-    const p4 = products.find((p) => p.id === "prod-4");
-    const initial: CartItem[] = [];
-    if (p1) initial.push({ product: p1, quantity: 1, discount: 0 });
-    if (p2) initial.push({ product: p2, quantity: 1, discount: 0 });
-    if (p4) initial.push({ product: p4, quantity: 1, discount: 0 });
-    return initial;
-  });
-
-  const [cartDiscount, setCartDiscount] = useState<number>(2000);
+  // Keranjang dimulai kosong (0 item)
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const [cartDiscount, setCartDiscount] = useState<number>(0);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("Tunai");
-  const [heldTransactions, setHeldTransactions] = useState<HeldTransaction[]>([]);
+  const [heldTransactions, setHeldTransactions] = useState<HeldTransaction[]>(
+    []
+  );
   const [showHeldModal, setShowHeldModal] = useState(false);
   const [showBarcodeModal, setShowBarcodeModal] = useState(false);
   const [barcodeInput, setBarcodeInput] = useState("");
 
   // Checkout & Receipt Modal states
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
-  const [cashReceivedInput, setCashReceivedInput] = useState<number>(30000);
-  const [completedReceipt, setCompletedReceipt] = useState<SaleTransaction | null>(null);
+  const [cashReceivedInput, setCashReceivedInput] = useState<number>(0);
+  const [completedReceipt, setCompletedReceipt] =
+    useState<SaleTransaction | null>(null);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
 
@@ -141,7 +138,8 @@ export function PosView({
   };
 
   const subtotal = cart.reduce(
-    (sum, item) => sum + item.product.sellingPrice * item.quantity - item.discount,
+    (sum, item) =>
+      sum + item.product.sellingPrice * item.quantity - item.discount,
     0
   );
   const effectiveDiscount = Math.min(cartDiscount, subtotal);
@@ -199,7 +197,6 @@ export function PosView({
   const finalizeCheckout = async () => {
     setCheckoutError(null);
 
-    // Bab 10.1: QRIS membutuhkan koneksi internet untuk membuat & memverifikasi pembayaran
     if (!isOnline && paymentMethod === "QRIS") {
       setCheckoutError(
         "Mode Offline Aktif: Pembayaran QRIS wajib terhubung ke internet untuk verifikasi gateway resmi. Gunakan metode Tunai atau aktifkan koneksi Online."
@@ -208,13 +205,16 @@ export function PosView({
     }
 
     if (paymentMethod === "Tunai" && cashReceivedInput < grandTotal) {
-      setCheckoutError("Nominal uang tunai yang diterima kurang dari total tagihan.");
+      setCheckoutError(
+        "Nominal uang tunai yang diterima kurang dari total tagihan."
+      );
       return;
     }
 
     setIsProcessingPayment(true);
     const idempotencyKey = generateId("idem");
-    const invoiceNum = `INV-20261116-${String(
+    const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    const invoiceNum = `INV-${todayStr}-${String(
       Math.floor(100 + Math.random() * 899)
     )}`;
 
@@ -226,7 +226,7 @@ export function PosView({
 
     const newSale: SaleTransaction = {
       id: generateId("sale"),
-      tenantId: "tenant-toko-utama-001",
+      tenantId: "tenant-kelokra-001",
       invoiceNumber: invoiceNum,
       idempotencyKey,
       createdAt: new Date().toISOString(),
@@ -238,7 +238,7 @@ export function PosView({
         sku: item.product.sku,
         quantity: item.quantity,
         unitPrice: item.product.sellingPrice,
-        unitCost: item.product.purchasePrice, // HPP snapshot
+        unitCost: item.product.purchasePrice,
         discount: item.discount,
         subtotal: item.product.sellingPrice * item.quantity - item.discount,
       })),
@@ -343,7 +343,7 @@ export function PosView({
           <div class="divider"></div>
           <div class="center" style="font-size:11px;margin-top:8px;">
             <p>${storeSettings.receiptFooter}</p>
-            <p style="margin-top:4px;color:#64748B;">Powered by NEXTPOS SaaS</p>
+            <p style="margin-top:4px;color:#64748B;">Powered by KELOKRA</p>
           </div>
           <script>window.onload = () => { window.print(); }</script>
         </body>
@@ -354,9 +354,9 @@ export function PosView({
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-      {/* LEFT / CENTER: Product Catalog (8 Columns on Desktop) */}
+      {/* LEFT / CENTER: Product Catalog */}
       <div className="lg:col-span-7 xl:col-span-8 space-y-4">
-        {/* Top Search & Action Bar matching Mockup */}
+        {/* Top Search & Action Bar */}
         <div className="bg-white rounded-2xl border border-slate-200/80 p-3.5 shadow-card flex flex-wrap items-center gap-3">
           <div className="relative flex-1 min-w-[200px]">
             <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
@@ -397,7 +397,7 @@ export function PosView({
           </button>
         </div>
 
-        {/* Category Tabs matching Mockup */}
+        {/* Category Tabs */}
         <div className="flex items-center gap-2 overflow-x-auto pb-1">
           {categories.map((cat) => {
             const active = selectedCategory === cat;
@@ -417,67 +417,98 @@ export function PosView({
           })}
         </div>
 
-        {/* Product Grid matching Mockup */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-3 gap-4">
-          {filteredProducts.map((product) => {
-            const inCartQty =
-              cart.find((c) => c.product.id === product.id)?.quantity || 0;
-            const isLowStock = product.stock <= product.minStock;
-
-            return (
-              <div
-                key={product.id}
-                onClick={() => addToCart(product)}
-                className={`group bg-white rounded-2xl border p-3.5 shadow-card transition cursor-pointer select-none flex flex-col justify-between relative ${
-                  inCartQty > 0
-                    ? "border-emerald-500 ring-2 ring-emerald-500/15"
-                    : "border-slate-200/80 hover:border-emerald-400 hover:shadow-md"
-                }`}
+        {/* Product Grid or Empty State */}
+        {products.length === 0 ? (
+          <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-12 text-center space-y-3 shadow-card">
+            <div className="w-14 h-14 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto">
+              <PackagePlus className="w-7 h-7" />
+            </div>
+            <h3 className="text-base font-extrabold text-navy-800">
+              Belum Ada Produk di Katalog Kasir
+            </h3>
+            <p className="text-xs text-slate-500 max-w-md mx-auto">
+              Silakan tambahkan produk Anda terlebih dahulu di menu{" "}
+              <b>Manajemen Produk</b> agar produk muncul di layar kasir POS ini.
+            </p>
+            {onNavigate && (
+              <button
+                onClick={() => onNavigate("products")}
+                className="px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs sm:text-sm font-bold shadow-sm transition inline-flex items-center gap-2"
               >
-                {inCartQty > 0 && (
-                  <span className="absolute top-2.5 right-2.5 z-10 w-6 h-6 rounded-full bg-emerald-500 text-white text-xs font-extrabold flex items-center justify-center shadow">
-                    {inCartQty}
-                  </span>
-                )}
+                <Plus className="w-4 h-4" />
+                <span>Tambah Produk Sekarang</span>
+              </button>
+            )}
+          </div>
+        ) : filteredProducts.length === 0 ? (
+          <div className="bg-white rounded-2xl border border-slate-200/80 p-10 text-center space-y-2">
+            <p className="text-sm font-bold text-slate-500">
+              Tidak ada produk yang cocok dengan pencarian Anda.
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-3 gap-4">
+            {filteredProducts.map((product) => {
+              const inCartQty =
+                cart.find((c) => c.product.id === product.id)?.quantity || 0;
+              const isLowStock = product.stock <= product.minStock;
 
-                <div>
-                  <ProductVisual
-                    imageKey={product.image}
-                    name={product.name}
-                    size="md"
-                  />
-                  <div className="mt-3">
-                    <h3 className="text-sm font-bold text-navy-800 group-hover:text-emerald-700 transition line-clamp-1">
-                      {product.name}
-                    </h3>
-                    <p className="text-sm font-extrabold text-navy-800 mt-0.5">
-                      {formatIDR(product.sellingPrice)}
-                    </p>
+              return (
+                <div
+                  key={product.id}
+                  onClick={() => addToCart(product)}
+                  className={`group bg-white rounded-2xl border p-3.5 shadow-card transition cursor-pointer select-none flex flex-col justify-between relative ${
+                    inCartQty > 0
+                      ? "border-emerald-500 ring-2 ring-emerald-500/15"
+                      : "border-slate-200/80 hover:border-emerald-400 hover:shadow-md"
+                  }`}
+                >
+                  {inCartQty > 0 && (
+                    <span className="absolute top-2.5 right-2.5 z-10 w-6 h-6 rounded-full bg-emerald-500 text-white text-xs font-extrabold flex items-center justify-center shadow">
+                      {inCartQty}
+                    </span>
+                  )}
+
+                  <div>
+                    <ProductVisual
+                      imageKey={product.image}
+                      name={product.name}
+                      size="md"
+                    />
+                    <div className="mt-3">
+                      <h3 className="text-sm font-bold text-navy-800 group-hover:text-emerald-700 transition line-clamp-1">
+                        {product.name}
+                      </h3>
+                      <p className="text-sm font-extrabold text-navy-800 mt-0.5">
+                        {formatIDR(product.sellingPrice)}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between text-[11px]">
+                    <span className="text-slate-400 font-medium">
+                      {product.sku}
+                    </span>
+                    <span
+                      className={`px-2 py-0.5 rounded-md font-semibold ${
+                        isLowStock
+                          ? "bg-amber-50 text-amber-700"
+                          : "bg-emerald-50 text-emerald-700"
+                      }`}
+                    >
+                      Stok: {product.stock}
+                    </span>
                   </div>
                 </div>
-
-                <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between text-[11px]">
-                  <span className="text-slate-400 font-medium">{product.sku}</span>
-                  <span
-                    className={`px-2 py-0.5 rounded-md font-semibold ${
-                      isLowStock
-                        ? "bg-amber-50 text-amber-700"
-                        : "bg-emerald-50 text-emerald-700"
-                    }`}
-                  >
-                    Stok: {product.stock}
-                  </span>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
-      {/* RIGHT PANEL: Keranjang Belanja matching Mockup (4 Columns on Desktop) */}
+      {/* RIGHT PANEL: Keranjang Belanja */}
       <div className="lg:col-span-5 xl:col-span-4 bg-white rounded-2xl border border-slate-200/80 p-5 shadow-card sticky top-4 flex flex-col justify-between">
         <div>
-          {/* Cart Header */}
           <div className="flex items-center justify-between pb-3.5 border-b border-slate-100">
             <h2 className="text-base font-extrabold text-navy-800">
               Keranjang Belanja ({cart.reduce((s, i) => s + i.quantity, 0)})
@@ -492,7 +523,6 @@ export function PosView({
             )}
           </div>
 
-          {/* Customer & Promo Selector Row */}
           <div className="grid grid-cols-2 gap-2 my-3">
             <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200/80 rounded-xl px-2.5 py-1.5">
               <UserCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
@@ -527,7 +557,6 @@ export function PosView({
             </div>
           </div>
 
-          {/* Cart Items List */}
           <div className="divide-y divide-slate-100 max-h-72 overflow-y-auto pr-1">
             {cart.length === 0 ? (
               <div className="py-12 text-center space-y-2">
@@ -595,7 +624,7 @@ export function PosView({
           </div>
         </div>
 
-        {/* Totals & Payment Controls matching Mockup */}
+        {/* Totals & Payment Controls */}
         <div className="pt-4 border-t border-slate-200/80 space-y-4 mt-2">
           <div className="space-y-1.5 text-sm">
             <div className="flex justify-between text-slate-600">
@@ -619,14 +648,15 @@ export function PosView({
               </div>
             )}
             <div className="flex justify-between items-baseline pt-2 border-t border-slate-100">
-              <span className="text-base font-extrabold text-navy-800">Total</span>
+              <span className="text-base font-extrabold text-navy-800">
+                Total
+              </span>
               <span className="text-2xl font-extrabold text-emerald-600">
                 {formatIDR(grandTotal)}
               </span>
             </div>
           </div>
 
-          {/* Payment Method Pills matching Mockup */}
           <div className="grid grid-cols-4 gap-1.5">
             {(
               [
@@ -666,7 +696,6 @@ export function PosView({
             </div>
           )}
 
-          {/* Action Buttons matching Mockup */}
           <div className="space-y-2.5">
             <button
               onClick={openPaymentModal}
@@ -706,7 +735,7 @@ export function PosView({
               </button>
             </div>
             <p className="text-xs text-slate-500">
-              Arahkan scanner USB/Bluetooth atau pilih simulasi barcode produk di bawah:
+              Arahkan scanner USB/Bluetooth atau ketik kode barcode/SKU produk:
             </p>
             <form onSubmit={handleBarcodeScan} className="flex gap-2">
               <input
@@ -714,7 +743,7 @@ export function PosView({
                 autoFocus
                 value={barcodeInput}
                 onChange={(e) => setBarcodeInput(e.target.value)}
-                placeholder="Ketik barcode (mis: 899100210101)..."
+                placeholder="Ketik barcode atau SKU..."
                 className="flex-1 px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:border-emerald-500"
               />
               <button
@@ -724,27 +753,6 @@ export function PosView({
                 Tambah
               </button>
             </form>
-            <div className="space-y-1.5 pt-2">
-              <p className="text-xs font-bold text-slate-500">Klik Cepat Barcode Demo:</p>
-              <div className="grid grid-cols-2 gap-2">
-                {products.slice(0, 4).map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => {
-                      addToCart(p);
-                      setShowBarcodeModal(false);
-                    }}
-                    className="p-2 rounded-xl border border-slate-200 hover:border-emerald-500 text-left text-xs transition"
-                  >
-                    <div className="font-bold text-navy-800 truncate">{p.name}</div>
-                    <div className="text-slate-400 font-mono text-[11px]">
-                      {p.barcode}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
           </div>
         </div>
       )}
@@ -831,7 +839,7 @@ export function PosView({
                   className="w-full px-4 py-3 rounded-xl border border-slate-200 text-lg font-extrabold text-navy-800 focus:outline-none focus:border-emerald-500"
                 />
                 <div className="grid grid-cols-4 gap-2">
-                  {[grandTotal, 30000, 50000, 100000].map((nom, i) => (
+                  {[grandTotal, 20000, 50000, 100000].map((nom, i) => (
                     <button
                       key={i}
                       type="button"
@@ -843,7 +851,9 @@ export function PosView({
                   ))}
                 </div>
                 <div className="flex justify-between items-center pt-2 text-sm">
-                  <span className="font-semibold text-slate-600">Kembalian:</span>
+                  <span className="font-semibold text-slate-600">
+                    Kembalian:
+                  </span>
                   <span className="text-lg font-extrabold text-navy-800">
                     {formatIDR(Math.max(0, cashReceivedInput - grandTotal))}
                   </span>
@@ -855,7 +865,7 @@ export function PosView({
                   <QrCode className="w-28 h-28 text-navy-800" />
                 </div>
                 <p className="text-xs font-semibold text-navy-800">
-                  Scan QRIS Dinamis NEXTPOS • Nominal Otomatis{" "}
+                  Scan QRIS Dinamis KELOKRA • Nominal Otomatis{" "}
                   <b>{formatIDR(grandTotal)}</b>
                 </p>
                 <p className="text-[11px] text-slate-500">
@@ -885,7 +895,10 @@ export function PosView({
                   finalizeCheckout().then(() => {
                     if (
                       !(!isOnline && paymentMethod === "QRIS") &&
-                      !(paymentMethod === "Tunai" && cashReceivedInput < grandTotal)
+                      !(
+                        paymentMethod === "Tunai" &&
+                        cashReceivedInput < grandTotal
+                      )
                     ) {
                       setShowCheckoutModal(false);
                     }
@@ -900,21 +913,19 @@ export function PosView({
         </div>
       )}
 
-      {/* MOBILE / THERMAL RECEIPT SUCCESS MODAL (Matching Bottom-Right Phone Mockup!) */}
+      {/* MOBILE / THERMAL RECEIPT SUCCESS MODAL with KELOKRA Logo */}
       {completedReceipt && (
         <div className="fixed inset-0 z-50 bg-navy-900/70 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-[32px] max-w-sm w-full p-6 shadow-2xl border-4 border-navy-800 space-y-5 text-center relative overflow-hidden">
-            {/* Brand Header */}
-            <div className="flex items-center justify-center gap-2 pt-1">
-              <div className="w-7 h-7 rounded-lg bg-emerald-500 flex items-center justify-center text-white font-black text-sm">
-                N
-              </div>
-              <span className="font-extrabold text-navy-800 tracking-tight text-base">
-                NEXTPOS
-              </span>
+            {/* KELOKRA Brand Logo Header */}
+            <div className="flex items-center justify-center pt-1">
+              <img
+                src="/kelokra-logo.png"
+                alt="KELOKRA Logo"
+                className="h-8 w-auto object-contain"
+              />
             </div>
 
-            {/* Check Icon */}
             <div className="w-16 h-16 rounded-full bg-emerald-500/15 text-emerald-500 flex items-center justify-center mx-auto ring-8 ring-emerald-500/5">
               <CheckCircle2 className="w-10 h-10 stroke-[2.5]" />
             </div>
@@ -931,7 +942,6 @@ export function PosView({
               </p>
             </div>
 
-            {/* Receipt Summary Box */}
             <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200/80 space-y-2">
               <p className="text-xs font-medium text-slate-500">
                 Total Pembayaran ({completedReceipt.paymentMethod})
@@ -950,7 +960,6 @@ export function PosView({
               </p>
             </div>
 
-            {/* Action Buttons matching Mobile Mockup */}
             <div className="space-y-2.5 pt-1">
               <button
                 onClick={() => handlePrintThermalReceipt(completedReceipt)}

@@ -1,13 +1,19 @@
 {
-  "name": "NEXTPOS — Modern Multi-Tenant SaaS Point of Sale",
-  "short_name": "NEXTPOS",
-  "description": "Solusi Kasir Modern Multi-Tenant SaaS untuk Berbagai Skala Bisnis dengan dukungan Offline-First PWA",
+  "name": "KELOKRA — Modern Multi-Tenant SaaS Point of Sale",
+  "short_name": "KELOKRA",
+  "description": "Solusi Kasir Modern Multi-Tenant SaaS KELOKRA dengan dukungan Offline-First PWA",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#F8FAFC",
   "theme_color": "#0F2933",
   "orientation": "any",
   "icons": [
+    {
+      "src": "/kelokra-logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
     {
       "src": "/icon.svg",
       "sizes": "any",

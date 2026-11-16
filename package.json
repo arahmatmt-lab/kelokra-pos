@@ -1,8 +1,8 @@
 {
-  "name": "nextpos-saas",
+  "name": "kelokra-pos",
   "version": "1.1.0",
   "private": true,
-  "description": "NEXTPOS — Modern Multi-Tenant SaaS Point of Sale (Versi Revisi 1.1)",
+  "description": "KELOKRA — Modern Multi-Tenant SaaS Point of Sale",
   "scripts": {
     "dev": "next dev",
     "build": "next build",

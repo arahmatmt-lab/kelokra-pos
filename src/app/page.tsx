@@ -71,13 +71,13 @@ import { ReportsFinanceView } from "@/components/views/ReportsFinanceView";
 import { SaasSettingsAdminView } from "@/components/views/SaasSettingsAdminView";
 import { LandingAuthModal } from "@/components/LandingAuthModal";
 
-const STORAGE_KEY = "nextpos_saas_state_v1_1";
+const STORAGE_KEY = "kelokra_saas_state_v1";
 
-export default function NextPosApp() {
+export default function KelokraApp() {
   // Navigation & RBAC state
   const [activeMenu, setActiveMenu] = useState<string>("dashboard");
   const [currentRole, setCurrentRole] = useState<UserRole>("OWNER");
-  const [currentUserName, setCurrentUserName] = useState<string>("Andi Pratama");
+  const [currentUserName, setCurrentUserName] = useState<string>("Owner");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
@@ -88,17 +88,17 @@ export default function NextPosApp() {
 
   // Online / Offline PWA Simulation & Sync Queue
   const [isOnline, setIsOnline] = useState(true);
-  const [lastSyncTime, setLastSyncTime] = useState("15:24");
+  const [lastSyncTime, setLastSyncTime] = useState("-");
   const [isSyncing, setIsSyncing] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  // Core Business Domain States
+  // Core Business Domain States (Initialized Empty)
   const [products, setProducts] = useState<Product[]>(INITIAL_PRODUCTS);
   const [sales, setSales] = useState<SaleTransaction[]>(INITIAL_SALES);
   const [movements, setMovements] = useState<StockMovement[]>(
     INITIAL_STOCK_MOVEMENTS
   );
-  const [suppliers] = useState<Supplier[]>(INITIAL_SUPPLIERS);
+  const [suppliers, setSuppliers] = useState<Supplier[]>(INITIAL_SUPPLIERS);
   const [purchases, setPurchases] =
     useState<PurchaseOrder[]>(INITIAL_PURCHASES);
   const [returns, setReturns] = useState<ReturnRecord[]>(INITIAL_RETURNS);
@@ -131,15 +131,17 @@ export default function NextPosApp() {
     }, 3500);
   };
 
-  // Load persisted state from localStorage + register PWA Service Worker
+  // Clear old NEXTPOS dummy storage key & load KELOKRA state
   useEffect(() => {
     try {
+      localStorage.removeItem("nextpos_saas_state_v1_1");
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
         if (parsed.products) setProducts(parsed.products);
         if (parsed.sales) setSales(parsed.sales);
         if (parsed.movements) setMovements(parsed.movements);
+        if (parsed.suppliers) setSuppliers(parsed.suppliers);
         if (parsed.purchases) setPurchases(parsed.purchases);
         if (parsed.returns) setReturns(parsed.returns);
         if (parsed.customers) setCustomers(parsed.customers);
@@ -177,6 +179,7 @@ export default function NextPosApp() {
           products,
           sales,
           movements,
+          suppliers,
           purchases,
           returns,
           customers,
@@ -195,6 +198,7 @@ export default function NextPosApp() {
     products,
     sales,
     movements,
+    suppliers,
     purchases,
     returns,
     customers,
@@ -209,7 +213,7 @@ export default function NextPosApp() {
   const appendAudit = (action: string, module: string, details: string) => {
     const newEntry: AuditLogEntry = {
       id: generateId("aud"),
-      timestamp: `16 Nov 2026 ${formatShortTime()}`,
+      timestamp: `${new Date().toLocaleDateString("id-ID")} ${formatShortTime()}`,
       actor: currentUserName,
       role:
         currentRole === "OWNER"
@@ -224,11 +228,10 @@ export default function NextPosApp() {
     setAuditLogs((prev) => [newEntry, ...prev]);
   };
 
-  // Handler 1: Complete POS Sale (Deducts Stock + Records Stock Movement + Updates Shift + Audits)
+  // Handler 1: Complete POS Sale
   const handleCompleteSale = (sale: SaleTransaction) => {
     setSales((prev) => [sale, ...prev]);
 
-    // Update product stock & soldCount
     setProducts((prev) =>
       prev.map((prod) => {
         const soldItem = sale.items.find((i) => i.productId === prod.id);
@@ -241,7 +244,6 @@ export default function NextPosApp() {
       })
     );
 
-    // Record stock movements (Bab 9.2)
     const newMovements: StockMovement[] = sale.items.map((item) => {
       const prod = products.find((p) => p.id === item.productId);
       const balanceAfter = Math.max(0, (prod?.stock || 0) - item.quantity);
@@ -257,12 +259,11 @@ export default function NextPosApp() {
         reference: sale.invoiceNumber,
         reason: `Penjualan POS (${sale.paymentMethod})`,
         actor: sale.cashierName,
-        createdAt: `16 Nov 2026 ${formatShortTime()}`,
+        createdAt: `${new Date().toLocaleDateString("id-ID")} ${formatShortTime()}`,
       };
     });
     setMovements((prev) => [...newMovements, ...prev]);
 
-    // Update active cash shift if Tunai
     if (sale.paymentMethod === "Tunai") {
       setShifts((prev) =>
         prev.map((sh) =>
@@ -295,7 +296,7 @@ export default function NextPosApp() {
     }
   };
 
-  // Handler 2: Offline Queue Sync (Bab 10.1)
+  // Handler 2: Offline Queue Sync
   const unsyncedSales = sales.filter((s) => !s.synced);
 
   const handleSyncOfflineTransactions = async () => {
@@ -354,7 +355,7 @@ export default function NextPosApp() {
           reference: "INIT-STOCK",
           reason: "Stok Awal Produk Baru",
           actor: currentUserName,
-          createdAt: `16 Nov 2026 ${formatShortTime()}`,
+          createdAt: `${new Date().toLocaleDateString("id-ID")} ${formatShortTime()}`,
         },
         ...prev,
       ]);
@@ -390,7 +391,7 @@ export default function NextPosApp() {
     }
   };
 
-  // Handler 4: Stok Opname (Bab 9.2)
+  // Handler 4: Stok Opname
   const handlePerformOpname = (
     productId: string,
     actualQty: number,
@@ -414,10 +415,10 @@ export default function NextPosApp() {
         type: "OPNAME",
         quantity: diff,
         balanceAfter: actualQty,
-        reference: `OPN-20261116-${Math.floor(10 + Math.random() * 89)}`,
+        reference: `OPN-${Math.floor(10 + Math.random() * 89)}`,
         reason,
         actor: currentUserName,
-        createdAt: `16 Nov 2026 ${formatShortTime()}`,
+        createdAt: `${new Date().toLocaleDateString("id-ID")} ${formatShortTime()}`,
       },
       ...prev,
     ]);
@@ -430,7 +431,7 @@ export default function NextPosApp() {
     showToast(`Stok Opname "${target.name}" berhasil disimpan!`);
   };
 
-  // Handler 5: Purchases & Returns (Bab 7.6 & 9.1 Weighted Average Cost)
+  // Handler 5: Purchases & Returns
   const handleCreatePurchase = (po: PurchaseOrder) => {
     setPurchases((prev) => [po, ...prev]);
     appendAudit(
@@ -445,14 +446,15 @@ export default function NextPosApp() {
     const po = purchases.find((p) => p.id === poId);
     if (!po || po.status === "RECEIVED") return;
 
-    const receivedTime = `16 Nov 2026 ${formatShortTime()}`;
+    const receivedTime = `${new Date().toLocaleDateString("id-ID")} ${formatShortTime()}`;
     setPurchases((prev) =>
       prev.map((p) =>
-        p.id === poId ? { ...p, status: "RECEIVED", receivedAt: receivedTime } : p
+        p.id === poId
+          ? { ...p, status: "RECEIVED", receivedAt: receivedTime }
+          : p
       )
     );
 
-    // Update stock & Weighted Average Cost (HPP) per Bab 9.1
     setProducts((prev) =>
       prev.map((prod) => {
         const item = po.items.find((i) => i.productId === prod.id);
@@ -507,9 +509,7 @@ export default function NextPosApp() {
       if (ret.type === "CUSTOMER_RETURN" && ret.restockEligible) {
         const nextStock = prod.stock + ret.quantity;
         setProducts((prev) =>
-          prev.map((p) =>
-            p.id === prod.id ? { ...p, stock: nextStock } : p
-          )
+          prev.map((p) => (p.id === prod.id ? { ...p, stock: nextStock } : p))
         );
         setMovements((prev) => [
           {
@@ -531,9 +531,7 @@ export default function NextPosApp() {
       } else if (ret.type === "SUPPLIER_RETURN") {
         const nextStock = Math.max(0, prod.stock - ret.quantity);
         setProducts((prev) =>
-          prev.map((p) =>
-            p.id === prod.id ? { ...p, stock: nextStock } : p
-          )
+          prev.map((p) => (p.id === prod.id ? { ...p, stock: nextStock } : p))
         );
         setMovements((prev) => [
           {
@@ -571,7 +569,7 @@ export default function NextPosApp() {
   ) => {
     setCurrentRole(role);
     if (role === "OWNER") {
-      setCurrentUserName(customName || "Andi Pratama");
+      setCurrentUserName(customName || "Owner");
       if (customStore) {
         setStoreSettings((prev) => ({ ...prev, storeName: customStore }));
         setCurrentPlan("FREE_TRIAL");
@@ -579,16 +577,16 @@ export default function NextPosApp() {
           {
             id: generateId("tenant"),
             businessName: customStore,
-            ownerName: customName || "Owner Baru",
-            ownerEmail: "owner@bisnisbaru.id",
+            ownerName: customName || "Owner",
+            ownerEmail: "owner@bisnis.id",
             businessType: "UMKM / Ritel",
             plan: "FREE_TRIAL",
             status: "TRIALING",
             cashierCount: 1,
             maxCashiers: 1,
             mrrContribution: 0,
-            joinedDate: "16 Nov 2026",
-            periodEnd: "30 Nov 2026 (Trial 14 Hari)",
+            joinedDate: new Date().toLocaleDateString("id-ID"),
+            periodEnd: "Trial 14 Hari",
           },
           ...prev,
         ]);
@@ -596,21 +594,20 @@ export default function NextPosApp() {
           `Selamat datang! Tenant "${customStore}" aktif dengan Trial Gratis 14 Hari.`
         );
       } else {
-        showToast("Berpindah ke akun Owner Bisnis (Andi Pratama)");
+        showToast("Berpindah ke akun Owner Bisnis");
       }
       setActiveMenu("dashboard");
     } else if (role === "CASHIER") {
-      setCurrentUserName("Siti Nurhaliza");
+      setCurrentUserName("Kasir");
       setActiveMenu("pos");
-      showToast("Berpindah ke tampilan Kasir Operasional (Siti Nurhaliza)");
+      showToast("Berpindah ke tampilan Kasir Operasional");
     } else {
-      setCurrentUserName("Super Admin NEXTPOS");
+      setCurrentUserName("Super Admin KELOKRA");
       setActiveMenu("super-admin");
       showToast("Berpindah ke Dashboard Super Admin Platform SaaS");
     }
   };
 
-  // Navigation items filtered by Role (Bab 4 RBAC)
   const navItems = [
     {
       id: "dashboard",
@@ -684,32 +681,32 @@ export default function NextPosApp() {
     SUBSCRIPTION_PLANS.find((p) => p.code === currentPlan) ||
     SUBSCRIPTION_PLANS[2];
 
+  const lowStockCount = products.filter((p) => p.stock <= p.minStock).length;
+
   return (
     <div className="min-h-screen flex bg-[#F8FAFC] text-[#0F2933]">
-      {/* SIDEBAR NAVIGATION — Deep Navy #0F2933 matching Mockup */}
+      {/* SIDEBAR NAVIGATION — Deep Navy #0F2933 with KELOKRA Logo */}
       <aside
         className={`fixed inset-y-0 left-0 z-40 w-64 bg-[#0F2933] text-white flex flex-col justify-between transition-transform duration-200 lg:static lg:translate-x-0 ${
           mobileMenuOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
-        {/* Top Brand Logo + Navigation */}
         <div className="p-5 space-y-6 overflow-y-auto">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <div
               onClick={() => setActiveMenu("dashboard")}
-              className="flex items-center gap-3 cursor-pointer select-none"
+              className="cursor-pointer select-none flex-1"
             >
-              <div className="w-9 h-9 rounded-xl bg-[#10B981] flex items-center justify-center text-white font-black text-lg shadow-md">
-                N
+              <div className="bg-white rounded-xl px-3 py-2 inline-flex items-center justify-center shadow-sm">
+                <img
+                  src="/kelokra-logo.png"
+                  alt="KELOKRA Logo"
+                  className="h-7 w-auto object-contain"
+                />
               </div>
-              <div>
-                <span className="text-lg font-extrabold tracking-tight block leading-none">
-                  NEXTPOS
-                </span>
-                <span className="text-[10px] text-emerald-400 font-semibold tracking-wider uppercase">
-                  {storeSettings.storeName}
-                </span>
-              </div>
+              <span className="text-[10px] text-emerald-400 font-semibold tracking-wider uppercase block mt-1.5 pl-0.5">
+                {storeSettings.storeName}
+              </span>
             </div>
 
             <button
@@ -746,9 +743,8 @@ export default function NextPosApp() {
           </nav>
         </div>
 
-        {/* Bottom Sidebar Widgets matching Mockup */}
+        {/* Bottom Sidebar Widgets */}
         <div className="p-4 space-y-3 border-t border-white/10">
-          {/* Online / Offline Sync Status Card matching POS Sidebar Mockup */}
           <div className="p-3 rounded-xl bg-white/5 border border-white/10 space-y-2">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -779,15 +775,12 @@ export default function NextPosApp() {
             </p>
           </div>
 
-          {/* Active Plan Card matching Dashboard Sidebar Mockup */}
           <div className="p-3.5 rounded-2xl bg-gradient-to-br from-emerald-950/90 to-navy-900 border border-emerald-500/30 flex items-center justify-between gap-2">
             <div>
               <p className="text-xs font-extrabold text-white">
                 {activePlanInfo.name}
               </p>
-              <p className="text-[10px] text-slate-300 mt-0.5">
-                Aktif hingga 16 Des 2026
-              </p>
+              <p className="text-[10px] text-slate-300 mt-0.5">Status: Aktif</p>
             </div>
             <button
               onClick={() => setActiveMenu("subscription")}
@@ -797,7 +790,6 @@ export default function NextPosApp() {
             </button>
           </div>
 
-          {/* Pengaturan & Bantuan Links */}
           <div className="space-y-1 pt-1">
             <button
               onClick={() => {
@@ -833,7 +825,7 @@ export default function NextPosApp() {
 
       {/* MAIN CONTENT AREA */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* TOP HEADER BAR matching Mockup */}
+        {/* TOP HEADER BAR */}
         <header className="sticky top-0 z-30 bg-white/90 backdrop-blur-md border-b border-slate-200/80 px-4 sm:px-6 py-3.5 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 flex-1 max-w-md">
             <button
@@ -844,14 +836,15 @@ export default function NextPosApp() {
               <Menu className="w-5 h-5" />
             </button>
 
-            {/* Search Bar ("Cari fitur atau tekan Ctrl + K...") */}
             <div className="relative flex-1">
               <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
                 value={globalSearch}
                 onFocus={() => setShowSearchDropdown(true)}
-                onBlur={() => setTimeout(() => setShowSearchDropdown(false), 180)}
+                onBlur={() =>
+                  setTimeout(() => setShowSearchDropdown(false), 180)
+                }
                 onChange={(e) => setGlobalSearch(e.target.value)}
                 placeholder="Cari fitur atau tekan Ctrl + K..."
                 className="w-full pl-10 pr-4 py-2 rounded-xl bg-slate-50 border border-slate-200/80 text-xs sm:text-sm text-navy-800 placeholder:text-slate-400 focus:outline-none focus:border-emerald-500"
@@ -860,13 +853,15 @@ export default function NextPosApp() {
               {showSearchDropdown && (
                 <div className="absolute left-0 right-0 top-11 bg-white rounded-2xl border border-slate-200 shadow-xl p-2 z-50 space-y-1">
                   <p className="px-3 py-1 text-[10px] font-bold text-slate-400 uppercase">
-                    Navigasi Cepat NEXTPOS
+                    Navigasi Cepat KELOKRA
                   </p>
                   {navItems
                     .filter(
                       (i) =>
                         !globalSearch ||
-                        i.label.toLowerCase().includes(globalSearch.toLowerCase())
+                        i.label
+                          .toLowerCase()
+                          .includes(globalSearch.toLowerCase())
                     )
                     .map((item) => (
                       <button
@@ -891,7 +886,6 @@ export default function NextPosApp() {
 
           {/* Right Header Controls */}
           <div className="flex items-center gap-2.5 sm:gap-3">
-            {/* Online/Offline Simulator Toggle */}
             <button
               onClick={() => {
                 const next = !isOnline;
@@ -926,7 +920,6 @@ export default function NextPosApp() {
               )}
             </button>
 
-            {/* Role / Demo Switcher Button */}
             <button
               onClick={() => setShowAuthModal(true)}
               className="px-3 py-1.5 rounded-xl bg-navy-800 hover:bg-navy-700 text-white text-xs font-bold transition hidden sm:flex items-center gap-1.5"
@@ -934,7 +927,6 @@ export default function NextPosApp() {
               <span>Ganti Role / Trial</span>
             </button>
 
-            {/* Notification Bell */}
             <div className="relative">
               <button
                 onClick={() => setShowNotifications((v) => !v)}
@@ -942,14 +934,16 @@ export default function NextPosApp() {
                 className="p-2 rounded-xl border border-slate-200/80 hover:bg-slate-50 text-slate-600 relative"
               >
                 <Bell className="w-4 h-4" />
-                <span className="w-2 h-2 rounded-full bg-rose-500 absolute top-1.5 right-1.5" />
+                {lowStockCount > 0 && (
+                  <span className="w-2 h-2 rounded-full bg-rose-500 absolute top-1.5 right-1.5" />
+                )}
               </button>
 
               {showNotifications && (
                 <div className="absolute right-0 top-11 w-72 bg-white rounded-2xl border border-slate-200 shadow-xl p-3.5 z-50 space-y-2.5 text-xs">
                   <div className="flex items-center justify-between border-b border-slate-100 pb-2">
                     <span className="font-extrabold text-navy-800">
-                      Notifikasi Sistem
+                      Notifikasi KELOKRA
                     </span>
                     <button
                       onClick={() => setShowNotifications(false)}
@@ -958,17 +952,20 @@ export default function NextPosApp() {
                       Tutup
                     </button>
                   </div>
-                  <div className="p-2.5 rounded-xl bg-amber-50 text-amber-900">
-                    <b>Stok Menipis:</b> Matcha Latte Creamy & Croissant Butter di bawah batas minimum.
-                  </div>
-                  <div className="p-2.5 rounded-xl bg-emerald-50 text-emerald-900">
-                    <b>Langganan Aktif:</b> Paket Pro berlaku hingga 16 Des 2026.
-                  </div>
+                  {lowStockCount > 0 ? (
+                    <div className="p-2.5 rounded-xl bg-amber-50 text-amber-900">
+                      <b>Stok Menipis:</b> {lowStockCount} produk berada di
+                      bawah batas stok minimum.
+                    </div>
+                  ) : (
+                    <div className="p-2.5 rounded-xl bg-slate-50 text-slate-600">
+                      Belum ada peringatan baru. Sistem siap digunakan.
+                    </div>
+                  )}
                 </div>
               )}
             </div>
 
-            {/* User Profile Pill matching Mockup ("Andi Pratama - Owner") */}
             <button
               onClick={() => setShowAuthModal(true)}
               className="flex items-center gap-2.5 pl-2 pr-3 py-1.5 rounded-xl hover:bg-slate-100 transition text-left"
@@ -978,7 +975,8 @@ export default function NextPosApp() {
                   .split(" ")
                   .map((n) => n[0])
                   .join("")
-                  .slice(0, 2)}
+                  .slice(0, 2)
+                  .toUpperCase()}
               </div>
               <div className="hidden md:block">
                 <p className="text-xs font-extrabold text-navy-800 leading-tight">
@@ -1016,6 +1014,7 @@ export default function NextPosApp() {
               isOnline={isOnline}
               cashierName={currentUserName}
               onCompleteSale={handleCompleteSale}
+              onNavigate={setActiveMenu}
             />
           )}
 
@@ -1032,6 +1031,10 @@ export default function NextPosApp() {
               onSaveProduct={handleSaveProduct}
               onDeleteProduct={handleDeleteProduct}
               onPerformOpname={handlePerformOpname}
+              onAddSupplier={(sup) => {
+                setSuppliers((prev) => [sup, ...prev]);
+                showToast(`Supplier "${sup.name}" berhasil ditambahkan!`);
+              }}
               onCreatePurchase={handleCreatePurchase}
               onReceivePurchase={handleReceivePurchase}
               onCreateReturn={handleCreateReturn}
@@ -1074,7 +1077,9 @@ export default function NextPosApp() {
                         ? {
                             ...s,
                             status: "CLOSED",
-                            closedAt: `16 Nov 2026 ${formatShortTime()}`,
+                            closedAt: `${new Date().toLocaleDateString(
+                              "id-ID"
+                            )} ${formatShortTime()}`,
                             closingCash: cashAmount,
                             difference: diff,
                             notes,
@@ -1095,7 +1100,9 @@ export default function NextPosApp() {
                     {
                       id: generateId("shift"),
                       cashierName: currentUserName,
-                      openedAt: `16 Nov 2026 ${formatShortTime()}`,
+                      openedAt: `${new Date().toLocaleDateString(
+                        "id-ID"
+                      )} ${formatShortTime()}`,
                       openingCash: cashAmount,
                       cashSales: 0,
                       expectedCash: cashAmount,
@@ -1159,7 +1166,7 @@ export default function NextPosApp() {
                   setSubscriptionPayments((prev) => [
                     {
                       id: generateId("subpay"),
-                      date: "16 Nov 2026",
+                      date: new Date().toLocaleDateString("id-ID"),
                       planName: `${planObj.name} (${
                         cycle === "MONTHLY" ? "Bulanan" : "Tahunan"
                       })`,
@@ -1200,6 +1207,7 @@ export default function NextPosApp() {
                   products,
                   sales,
                   movements,
+                  suppliers,
                   customers,
                   expenses,
                 };
@@ -1209,7 +1217,7 @@ export default function NextPosApp() {
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement("a");
                 a.href = url;
-                a.download = `NEXTPOS-Backup-${new Date()
+                a.download = `KELOKRA-Backup-${new Date()
                   .toISOString()
                   .slice(0, 10)}.json`;
                 a.click();
@@ -1218,18 +1226,21 @@ export default function NextPosApp() {
               }}
               onResetDemoData={() => {
                 localStorage.removeItem(STORAGE_KEY);
-                setProducts(INITIAL_PRODUCTS);
-                setSales(INITIAL_SALES);
-                setMovements(INITIAL_STOCK_MOVEMENTS);
-                setPurchases(INITIAL_PURCHASES);
-                setReturns(INITIAL_RETURNS);
-                setCustomers(INITIAL_CUSTOMERS);
-                setExpenses(INITIAL_EXPENSES);
-                setShifts(INITIAL_SHIFTS);
-                setEmployees(INITIAL_EMPLOYEES);
-                setCurrentPlan("PRO");
+                setProducts([]);
+                setSales([]);
+                setMovements([]);
+                setSuppliers([]);
+                setPurchases([]);
+                setReturns([]);
+                setCustomers([]);
+                setExpenses([]);
+                setShifts([]);
+                setEmployees([]);
+                setSubscriptionPayments([]);
+                setAuditLogs([]);
+                setPlatformTenants([]);
                 setStoreSettings(INITIAL_STORE_SETTINGS);
-                showToast("Seluruh data berhasil direset ke kondisi awal demo!");
+                showToast("Seluruh data berhasil dikosongkan!");
               }}
             />
           )}

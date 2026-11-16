@@ -1,5 +1,5 @@
-const CACHE_NAME = "nextpos-pwa-v1.1";
-const ASSETS_TO_CACHE = ["/", "/manifest.json", "/icon.svg"];
+const CACHE_NAME = "kelokra-pwa-v1.1";
+const ASSETS_TO_CACHE = ["/", "/manifest.json", "/icon.svg", "/kelokra-logo.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

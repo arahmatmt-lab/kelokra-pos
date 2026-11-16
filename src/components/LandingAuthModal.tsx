@@ -16,7 +16,11 @@ interface LandingAuthModalProps {
   isOpen: boolean;
   currentRole: UserRole;
   onClose: () => void;
-  onSelectRole: (role: UserRole, customName?: string, customStore?: string) => void;
+  onSelectRole: (
+    role: UserRole,
+    customName?: string,
+    customStore?: string
+  ) => void;
 }
 
 export function LandingAuthModal({
@@ -43,21 +47,20 @@ export function LandingAuthModal({
   return (
     <div className="fixed inset-0 z-50 bg-navy-900/75 backdrop-blur-xs flex items-center justify-center p-4">
       <div className="bg-navy-800 text-white rounded-3xl max-w-3xl w-full overflow-hidden shadow-2xl border border-white/10 grid grid-cols-1 md:grid-cols-12">
-        {/* Left Promotional Banner matching Bottom-Right Mockup Card */}
+        {/* Left Promotional Banner with KELOKRA Logo */}
         <div className="md:col-span-5 bg-gradient-to-br from-navy-900 via-navy-800 to-emerald-900/80 p-7 flex flex-col justify-between relative overflow-hidden">
           <div className="space-y-4 z-10">
-            <div className="flex items-center gap-2.5">
-              <div className="w-9 h-9 rounded-xl bg-emerald-500 flex items-center justify-center text-white font-black text-lg shadow-md">
-                N
-              </div>
-              <span className="text-xl font-extrabold tracking-tight">
-                NEXTPOS
-              </span>
+            <div className="inline-block bg-white rounded-2xl px-3.5 py-2 shadow-md">
+              <img
+                src="/kelokra-logo.png"
+                alt="KELOKRA Logo"
+                className="h-8 w-auto object-contain"
+              />
             </div>
 
             <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 text-xs font-bold">
               <Sparkles className="w-3.5 h-3.5" />
-              <span>Multi-Tenant SaaS POS v1.1</span>
+              <span>Multi-Tenant SaaS POS</span>
             </div>
 
             <h2 className="text-2xl font-extrabold leading-snug">
@@ -97,7 +100,7 @@ export function LandingAuthModal({
                     : "text-slate-500"
                 }`}
               >
-                Demo Instan (3 Role)
+                Pilih Peran Akses
               </button>
               <button
                 onClick={() => setTab("register")}
@@ -123,10 +126,10 @@ export function LandingAuthModal({
             <div className="space-y-4">
               <div>
                 <h3 className="text-lg font-extrabold text-navy-800">
-                  Pilih Peran Pengguna (RBAC Demo Instan)
+                  Pilih Peran Pengguna (RBAC KELOKRA)
                 </h3>
                 <p className="text-xs text-slate-500">
-                  Klik salah satu akun di bawah untuk mencoba tampilan sesuai hak akses pada dokumen spesifikasi Bab 4:
+                  Pilih salah satu peran di bawah untuk mengakses modul sesuai hak akses:
                 </p>
               </div>
 
@@ -144,11 +147,11 @@ export function LandingAuthModal({
                 >
                   <div className="flex items-center gap-3.5">
                     <div className="w-10 h-10 rounded-xl bg-emerald-500 text-white font-extrabold flex items-center justify-center">
-                      AP
+                      OW
                     </div>
                     <div>
                       <p className="text-sm font-extrabold text-navy-800">
-                        Andi Pratama — Owner Bisnis
+                        Owner Bisnis
                       </p>
                       <p className="text-xs text-slate-500">
                         Akses penuh: Dashboard, POS, Produk, HPP, Laporan Laba, Karyawan & Langganan
@@ -171,11 +174,11 @@ export function LandingAuthModal({
                 >
                   <div className="flex items-center gap-3.5">
                     <div className="w-10 h-10 rounded-xl bg-sky-500 text-white font-extrabold flex items-center justify-center">
-                      SN
+                      KS
                     </div>
                     <div>
                       <p className="text-sm font-extrabold text-navy-800">
-                        Siti Nurhaliza — Kasir Operasional
+                        Kasir Operasional
                       </p>
                       <p className="text-xs text-slate-500">
                         Akses fokus: Transaksi POS Cepat, Cetak Struk, Stok Produk & Shift Kasir
@@ -202,10 +205,10 @@ export function LandingAuthModal({
                     </div>
                     <div>
                       <p className="text-sm font-extrabold text-navy-800">
-                        Super Admin Platform (Pemilik SaaS NEXTPOS)
+                        Super Admin Platform (Pemilik SaaS KELOKRA)
                       </p>
                       <p className="text-xs text-slate-500">
-                        Kelola seluruh Tenant, pantau MRR Rp 6.950.000, paket langganan & audit
+                        Kelola seluruh Tenant, pantau MRR, paket langganan & audit platform
                       </p>
                     </div>
                   </div>
@@ -214,13 +217,16 @@ export function LandingAuthModal({
               </div>
             </div>
           ) : (
-            <form onSubmit={handleRegisterSubmit} className="space-y-3.5 text-sm">
+            <form
+              onSubmit={handleRegisterSubmit}
+              className="space-y-3.5 text-sm"
+            >
               <div>
                 <h3 className="text-lg font-extrabold text-navy-800">
                   Registrasi Bisnis Baru (Gratis Trial 14 Hari)
                 </h3>
                 <p className="text-xs text-slate-500">
-                  Sesuai Alur 7.1: Sistem membuat tenant terisolasi dan langsung mengaktifkan masa percobaan 14 hari.
+                  Sistem membuat tenant terisolasi dan langsung mengaktifkan masa percobaan 14 hari.
                 </p>
               </div>
 
@@ -235,7 +241,7 @@ export function LandingAuthModal({
                     required
                     value={ownerName}
                     onChange={(e) => setOwnerName(e.target.value)}
-                    placeholder="Contoh: Budi Hartono"
+                    placeholder="Masukkan nama pemilik..."
                     className="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-slate-200"
                   />
                 </div>
@@ -253,7 +259,7 @@ export function LandingAuthModal({
                       required
                       value={storeName}
                       onChange={(e) => setStoreName(e.target.value)}
-                      placeholder="Contoh: Kopi Kenangan Kita"
+                      placeholder="Masukkan nama toko..."
                       className="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-slate-200"
                     />
                   </div>
@@ -305,7 +311,7 @@ export function LandingAuthModal({
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
               Dilindungi Argon2id & PostgreSQL RLS
             </span>
-            <span>NEXTPOS v1.1</span>
+            <span>KELOKRA v1.1</span>
           </div>
         </div>
       </div>
