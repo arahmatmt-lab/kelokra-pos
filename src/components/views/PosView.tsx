@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Search,
   ScanBarcode,
@@ -10,8 +10,7 @@ import {
   PauseCircle,
   Banknote,
   QrCode,
-  CreditCard,
-  Smartphone,
+  Building2,
   CheckCircle2,
   Printer,
   Share2,
@@ -20,6 +19,8 @@ import {
   WifiOff,
   History,
   PackagePlus,
+  Copy,
+  AlertCircle,
   X,
 } from "lucide-react";
 import {
@@ -59,10 +60,57 @@ export function PosView({
   const [selectedCustomer, setSelectedCustomer] =
     useState<string>("Pelanggan Umum");
 
-  // Keranjang dimulai kosong (0 item)
   const [cart, setCart] = useState<CartItem[]>([]);
   const [cartDiscount, setCartDiscount] = useState<number>(0);
+
+  const activeTransferChannels = (storeSettings.transferChannels || []).filter(
+    (c) => c.isActive
+  );
+
+  const availableMethods: {
+    id: PaymentMethod;
+    label: string;
+    icon: typeof Banknote;
+  }[] = [];
+  if (storeSettings.cashEnabled) {
+    availableMethods.push({ id: "Tunai", label: "Tunai", icon: Banknote });
+  }
+  if (storeSettings.qrisEnabled) {
+    availableMethods.push({ id: "QRIS", label: "QRIS", icon: QrCode });
+  }
+  if (activeTransferChannels.length > 0) {
+    availableMethods.push({
+      id: "M-Banking / E-Wallet",
+      label: "M-Banking / E-Wallet",
+      icon: Building2,
+    });
+  }
+
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("Tunai");
+  const [selectedChannelId, setSelectedChannelId] = useState<string>("");
+
+  // Keep paymentMethod and selectedChannelId in sync with Owner settings
+  useEffect(() => {
+    if (
+      availableMethods.length > 0 &&
+      !availableMethods.some((m) => m.id === paymentMethod)
+    ) {
+      setPaymentMethod(availableMethods[0].id);
+    }
+    if (
+      activeTransferChannels.length > 0 &&
+      !activeTransferChannels.some((c) => c.id === selectedChannelId)
+    ) {
+      setSelectedChannelId(activeTransferChannels[0].id);
+    }
+  }, [
+    storeSettings.cashEnabled,
+    storeSettings.qrisEnabled,
+    activeTransferChannels.length,
+    paymentMethod,
+    selectedChannelId,
+  ]);
+
   const [heldTransactions, setHeldTransactions] = useState<HeldTransaction[]>(
     []
   );
@@ -188,11 +236,15 @@ export function PosView({
   };
 
   const openPaymentModal = () => {
-    if (cart.length === 0) return;
+    if (cart.length === 0 || availableMethods.length === 0) return;
     setCheckoutError(null);
     setCashReceivedInput(grandTotal);
     setShowCheckoutModal(true);
   };
+
+  const selectedTransferChannel =
+    activeTransferChannels.find((c) => c.id === selectedChannelId) ||
+    activeTransferChannels[0];
 
   const finalizeCheckout = async () => {
     setCheckoutError(null);
@@ -211,6 +263,16 @@ export function PosView({
       return;
     }
 
+    if (
+      paymentMethod === "M-Banking / E-Wallet" &&
+      !selectedTransferChannel
+    ) {
+      setCheckoutError(
+        "Pilih rekening Bank atau akun E-Wallet tujuan terlebih dahulu."
+      );
+      return;
+    }
+
     setIsProcessingPayment(true);
     const idempotencyKey = generateId("idem");
     const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
@@ -223,6 +285,16 @@ export function PosView({
       0
     );
     const netProfit = grandTotal - taxTotal - totalHpp;
+
+    let paymentDetail = paymentMethod as string;
+    if (paymentMethod === "QRIS" && storeSettings.qrisMerchantName) {
+      paymentDetail = `QRIS (${storeSettings.qrisMerchantName})`;
+    } else if (
+      paymentMethod === "M-Banking / E-Wallet" &&
+      selectedTransferChannel
+    ) {
+      paymentDetail = `${selectedTransferChannel.type} ${selectedTransferChannel.bankOrProviderName} (${selectedTransferChannel.accountNumber})`;
+    }
 
     const newSale: SaleTransaction = {
       id: generateId("sale"),
@@ -249,6 +321,7 @@ export function PosView({
       totalHpp,
       netProfit,
       paymentMethod,
+      paymentDetail,
       cashReceived: paymentMethod === "Tunai" ? cashReceivedInput : grandTotal,
       changeAmount:
         paymentMethod === "Tunai"
@@ -281,6 +354,7 @@ export function PosView({
     onCompleteSale(newSale);
     setCompletedReceipt(newSale);
     clearCart();
+    setShowCheckoutModal(false);
   };
 
   const handlePrintThermalReceipt = (tx: SaleTransaction) => {
@@ -321,7 +395,7 @@ export function PosView({
           <p style="margin:2px 0;">No: <b>${tx.invoiceNumber}</b></p>
           <p style="margin:2px 0;">Kasir: ${tx.cashierName}</p>
           <p style="margin:2px 0;">Pelanggan: ${tx.customerName}</p>
-          <p style="margin:2px 0;">Metode: ${tx.paymentMethod}</p>
+          <p style="margin:2px 0;">Metode: ${tx.paymentDetail || tx.paymentMethod}</p>
           <div class="divider"></div>
           <table>${itemsHtml}</table>
           <div class="divider"></div>
@@ -356,7 +430,6 @@ export function PosView({
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
       {/* LEFT / CENTER: Product Catalog */}
       <div className="lg:col-span-7 xl:col-span-8 space-y-4">
-        {/* Top Search & Action Bar */}
         <div className="bg-white rounded-2xl border border-slate-200/80 p-3.5 shadow-card flex flex-wrap items-center gap-3">
           <div className="relative flex-1 min-w-[200px]">
             <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
@@ -624,7 +697,7 @@ export function PosView({
           </div>
         </div>
 
-        {/* Totals & Payment Controls */}
+        {/* Totals & Dynamic Payment Controls from Owner */}
         <div className="pt-4 border-t border-slate-200/80 space-y-4 mt-2">
           <div className="space-y-1.5 text-sm">
             <div className="flex justify-between text-slate-600">
@@ -657,34 +730,45 @@ export function PosView({
             </div>
           </div>
 
-          <div className="grid grid-cols-4 gap-1.5">
-            {(
-              [
-                { id: "Tunai", label: "Tunai", icon: Banknote },
-                { id: "QRIS", label: "QRIS", icon: QrCode },
-                { id: "Kartu", label: "Kartu", icon: CreditCard },
-                { id: "E-Wallet", label: "E-Wallet", icon: Smartphone },
-              ] as const
-            ).map((pm) => {
-              const Icon = pm.icon;
-              const active = paymentMethod === pm.id;
-              return (
-                <button
-                  key={pm.id}
-                  type="button"
-                  onClick={() => setPaymentMethod(pm.id)}
-                  className={`py-2 px-1.5 rounded-xl border text-[11px] font-bold flex flex-col items-center justify-center gap-1 transition ${
-                    active
-                      ? "bg-emerald-50 border-emerald-500 text-emerald-700 ring-1 ring-emerald-500"
-                      : "bg-slate-50/70 border-slate-200 text-slate-600 hover:bg-slate-100"
-                  }`}
-                >
-                  <Icon className="w-4 h-4" />
-                  <span>{pm.label}</span>
-                </button>
-              );
-            })}
-          </div>
+          {/* Dynamic Payment Method Buttons */}
+          {availableMethods.length === 0 ? (
+            <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-700 font-semibold flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>
+                Belum ada metode pembayaran aktif. Owner dapat mengaktifkannya di menu Metode Pembayaran.
+              </span>
+            </div>
+          ) : (
+            <div
+              className={`grid gap-2 ${
+                availableMethods.length === 1
+                  ? "grid-cols-1"
+                  : availableMethods.length === 2
+                  ? "grid-cols-2"
+                  : "grid-cols-3"
+              }`}
+            >
+              {availableMethods.map((pm) => {
+                const Icon = pm.icon;
+                const active = paymentMethod === pm.id;
+                return (
+                  <button
+                    key={pm.id}
+                    type="button"
+                    onClick={() => setPaymentMethod(pm.id)}
+                    className={`py-2.5 px-2 rounded-xl border text-[11px] font-bold flex flex-col items-center justify-center gap-1 transition text-center ${
+                      active
+                        ? "bg-emerald-50 border-emerald-500 text-emerald-700 ring-1 ring-emerald-500"
+                        : "bg-slate-50/70 border-slate-200 text-slate-600 hover:bg-slate-100"
+                    }`}
+                  >
+                    <Icon className="w-4 h-4" />
+                    <span className="leading-tight">{pm.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
 
           {!isOnline && paymentMethod === "QRIS" && (
             <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 flex items-center gap-2 text-xs text-amber-800">
@@ -699,7 +783,7 @@ export function PosView({
           <div className="space-y-2.5">
             <button
               onClick={openPaymentModal}
-              disabled={cart.length === 0}
+              disabled={cart.length === 0 || availableMethods.length === 0}
               className="w-full py-3.5 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-600 disabled:bg-slate-300 text-white font-extrabold text-sm sm:text-base shadow-md transition flex items-center justify-center gap-2"
             >
               <span>Bayar Sekarang</span>
@@ -800,11 +884,11 @@ export function PosView({
       {/* CHECKOUT PAYMENT CONFIRMATION MODAL */}
       {showCheckoutModal && (
         <div className="fixed inset-0 z-50 bg-navy-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-5">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-5 max-h-[92vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div>
                 <h3 className="text-lg font-extrabold text-navy-800">
-                  Konfirmasi Pembayaran ({paymentMethod})
+                  Pembayaran ({paymentMethod})
                 </h3>
                 <p className="text-xs text-slate-500">
                   Pelanggan: {selectedCustomer}
@@ -827,7 +911,7 @@ export function PosView({
               </span>
             </div>
 
-            {paymentMethod === "Tunai" ? (
+            {paymentMethod === "Tunai" && (
               <div className="space-y-3">
                 <label className="block text-xs font-bold text-slate-600 uppercase">
                   Uang Tunai Diterima (Rp)
@@ -859,18 +943,95 @@ export function PosView({
                   </span>
                 </div>
               </div>
-            ) : (
+            )}
+
+            {paymentMethod === "QRIS" && (
               <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 text-center space-y-3">
-                <div className="w-36 h-36 mx-auto bg-white p-3 rounded-2xl border border-slate-200 flex items-center justify-center">
-                  <QrCode className="w-28 h-28 text-navy-800" />
+                {storeSettings.qrisImageDataUrl ? (
+                  <>
+                    <p className="text-xs font-extrabold text-navy-800">
+                      {storeSettings.qrisMerchantName || storeSettings.storeName}
+                    </p>
+                    <div className="bg-white p-3 rounded-2xl border border-slate-200 inline-block max-w-[240px]">
+                      <img
+                        src={storeSettings.qrisImageDataUrl}
+                        alt="QRIS Pembayaran Toko"
+                        className="w-52 h-auto max-h-64 object-contain mx-auto rounded-lg"
+                      />
+                    </div>
+                    <p className="text-xs font-semibold text-emerald-700">
+                      Scan QRIS di atas dengan nominal{" "}
+                      <b>{formatIDR(grandTotal)}</b>
+                    </p>
+                  </>
+                ) : (
+                  <div className="py-4 space-y-2">
+                    <div className="w-28 h-28 mx-auto bg-white p-3 rounded-2xl border border-dashed border-slate-300 flex items-center justify-center">
+                      <QrCode className="w-20 h-20 text-slate-300" />
+                    </div>
+                    <p className="text-xs font-bold text-amber-700">
+                      Gambar QRIS belum diupload oleh Owner.
+                    </p>
+                    <p className="text-[11px] text-slate-500">
+                      Owner dapat mengupload gambar QRIS toko melalui menu{" "}
+                      <b>Metode Pembayaran</b>.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {paymentMethod === "M-Banking / E-Wallet" && (
+              <div className="space-y-3">
+                <label className="block text-xs font-bold text-slate-600 uppercase">
+                  Pilih Tujuan Transfer M-Banking / E-Wallet
+                </label>
+                <div className="space-y-2">
+                  {activeTransferChannels.map((ch) => {
+                    const isSelected = selectedTransferChannel?.id === ch.id;
+                    return (
+                      <div
+                        key={ch.id}
+                        onClick={() => setSelectedChannelId(ch.id)}
+                        className={`p-3.5 rounded-xl border cursor-pointer transition flex items-center justify-between gap-2 ${
+                          isSelected
+                            ? "border-emerald-500 bg-emerald-50/70 ring-1 ring-emerald-500"
+                            : "border-slate-200 hover:border-emerald-300 bg-white"
+                        }`}
+                      >
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-navy-800 text-white">
+                              {ch.type}
+                            </span>
+                            <span className="text-sm font-extrabold text-navy-800">
+                              {ch.bankOrProviderName}
+                            </span>
+                          </div>
+                          <p className="text-sm font-mono font-bold text-emerald-700 mt-1">
+                            {ch.accountNumber}
+                          </p>
+                          {ch.accountHolder && (
+                            <p className="text-[11px] text-slate-500">
+                              a.n. {ch.accountHolder}
+                            </p>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            navigator.clipboard?.writeText(ch.accountNumber);
+                          }}
+                          title="Salin Nomor Rekening"
+                          className="p-2 rounded-lg border border-slate-200 bg-white text-slate-500 hover:text-emerald-600"
+                        >
+                          <Copy className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
-                <p className="text-xs font-semibold text-navy-800">
-                  Scan QRIS Dinamis KELOKRA • Nominal Otomatis{" "}
-                  <b>{formatIDR(grandTotal)}</b>
-                </p>
-                <p className="text-[11px] text-slate-500">
-                  Status Webhook Gateway: Siap diverifikasi otomatis
-                </p>
               </div>
             )}
 
@@ -891,19 +1052,7 @@ export function PosView({
               <button
                 type="button"
                 disabled={isProcessingPayment}
-                onClick={() => {
-                  finalizeCheckout().then(() => {
-                    if (
-                      !(!isOnline && paymentMethod === "QRIS") &&
-                      !(
-                        paymentMethod === "Tunai" &&
-                        cashReceivedInput < grandTotal
-                      )
-                    ) {
-                      setShowCheckoutModal(false);
-                    }
-                  });
-                }}
+                onClick={finalizeCheckout}
                 className="flex-1 py-3 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-extrabold text-sm shadow-md transition"
               >
                 {isProcessingPayment ? "Memproses..." : "Selesaikan Transaksi"}
@@ -913,11 +1062,10 @@ export function PosView({
         </div>
       )}
 
-      {/* MOBILE / THERMAL RECEIPT SUCCESS MODAL with KELOKRA Logo */}
+      {/* MOBILE / THERMAL RECEIPT SUCCESS MODAL */}
       {completedReceipt && (
         <div className="fixed inset-0 z-50 bg-navy-900/70 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-[32px] max-w-sm w-full p-6 shadow-2xl border-4 border-navy-800 space-y-5 text-center relative overflow-hidden">
-            {/* KELOKRA Brand Logo Header */}
             <div className="flex items-center justify-center pt-1">
               <img
                 src="/kelokra-logo.png"
@@ -944,7 +1092,10 @@ export function PosView({
 
             <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200/80 space-y-2">
               <p className="text-xs font-medium text-slate-500">
-                Total Pembayaran ({completedReceipt.paymentMethod})
+                Total Pembayaran (
+                {completedReceipt.paymentDetail ||
+                  completedReceipt.paymentMethod}
+                )
               </p>
               <p className="text-2xl font-extrabold text-navy-800">
                 {formatIDR(completedReceipt.grandTotal)}
@@ -972,9 +1123,14 @@ export function PosView({
               <button
                 onClick={() => {
                   const text = encodeURIComponent(
-                    `*STRUK DIGITAL ${storeSettings.storeName}*\nNo: ${completedReceipt.invoiceNumber}\nTotal: ${formatIDR(
+                    `*STRUK DIGITAL ${storeSettings.storeName}*\nNo: ${
+                      completedReceipt.invoiceNumber
+                    }\nTotal: ${formatIDR(
                       completedReceipt.grandTotal
-                    )}\nMetode: ${completedReceipt.paymentMethod}\nTerima kasih telah berbelanja!`
+                    )}\nMetode: ${
+                      completedReceipt.paymentDetail ||
+                      completedReceipt.paymentMethod
+                    }\nTerima kasih telah berbelanja!`
                   );
                   window.open(`https://wa.me/?text=${text}`, "_blank");
                 }}

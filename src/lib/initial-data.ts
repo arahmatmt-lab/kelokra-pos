@@ -1,124 +1,19 @@
 import {
-  AddOnItem,
   AuditLogEntry,
   CashShiftRecord,
   Customer,
-  EmployeeMember,
   ExpenseRecord,
-  PlatformTenantSummary,
+  ManagedAccount,
   Product,
   PurchaseOrder,
   ReturnRecord,
   SaleTransaction,
   StockMovement,
   StoreSettings,
-  SubscriptionPaymentRecord,
-  SubscriptionPlanInfo,
   Supplier,
 } from "@/types/nextpos";
 
 export const DEFAULT_TENANT_ID = "tenant-kelokra-001";
-
-export const SUBSCRIPTION_PLANS: SubscriptionPlanInfo[] = [
-  {
-    code: "FREE_TRIAL",
-    name: "Free / Trial 14 Hari",
-    monthlyPrice: 0,
-    yearlyPrice: 0,
-    maxCashiers: 1,
-    maxProducts: 100,
-    description: "Trial 14 hari gratis untuk mencoba seluruh alur dasar kasir KELOKRA.",
-    features: [
-      "1 Akun Owner + 1 Akun Kasir",
-      "Hingga 100 Produk Fisik",
-      "POS Transaksi Tunai & QRIS",
-      "Cetak Struk Thermal 58/80mm",
-      "Laporan Penjualan Dasar",
-    ],
-  },
-  {
-    code: "STARTER",
-    name: "Paket Starter",
-    monthlyPrice: 39000,
-    yearlyPrice: 390000,
-    maxCashiers: 2,
-    maxProducts: 500,
-    description: "Cocok untuk warung, kedai rintisan, atau toko ritel skala kecil.",
-    features: [
-      "1 Owner + hingga 2 Akun Kasir",
-      "Hingga 500 Produk & Barcode",
-      "POS Cepat & Hold Transaksi",
-      "Struk Digital WA & Cetak Thermal",
-      "Laporan Penjualan Harian",
-    ],
-  },
-  {
-    code: "PRO",
-    name: "Paket Pro",
-    monthlyPrice: 79000,
-    yearlyPrice: 790000,
-    maxCashiers: 5,
-    maxProducts: 999999,
-    badge: "Paling Populer",
-    description: "Pilihan terbaik untuk bisnis berkembang dengan inventaris, HPP & mode offline.",
-    features: [
-      "5 Akun Kasir (+1 Owner)",
-      "Produk Tanpa Batas",
-      "Laporan Lengkap & Perhitungan HPP",
-      "Fitur Offline PWA & Auto-Sync",
-      "Pembelian, Supplier & Stok Opname",
-      "Ekspor Data PDF & Excel/CSV",
-    ],
-  },
-  {
-    code: "BUSINESS",
-    name: "Paket Business",
-    monthlyPrice: 149000,
-    yearlyPrice: 1490000,
-    maxCashiers: 15,
-    maxProducts: 999999,
-    description: "Untuk operasional toko padat transaksi dengan audit log & dukungan prioritas.",
-    features: [
-      "1 Owner + hingga 15 Akun Kasir",
-      "Produk & Transaksi Tanpa Batas",
-      "Semua Fitur Paket Pro",
-      "Manajemen RBAC & Audit Log Penuh",
-      "Manajemen Shift Kasir & Arus Kas",
-      "Dukungan Prioritas & Backup Terjadwal",
-    ],
-  },
-];
-
-export const INITIAL_ADDONS: AddOnItem[] = [
-  {
-    id: "addon-cashier",
-    name: "Kasir Tambahan (+1 Akun)",
-    priceMonthly: 15000,
-    description: "Tambahkan kuota akun kasir aktif di atas batas paket langganan Anda.",
-    active: false,
-  },
-  {
-    id: "addon-whatsapp",
-    name: "Integrasi WhatsApp Otomatis",
-    priceMonthly: 25000,
-    description: "Kirim struk digital dan laporan penutupan shift langsung ke WhatsApp.",
-    active: false,
-  },
-  {
-    id: "addon-analytics",
-    name: "Analitik & Insight Lanjutan",
-    priceMonthly: 29000,
-    description: "Prediksi stok habis, analisis jam ramai, dan margin per produk.",
-    active: false,
-  },
-  {
-    id: "addon-branding",
-    name: "Kustomisasi Struk & Branding",
-    priceMonthly: 19000,
-    description: "Tampilkan logo bisnis khusus, pesan promo, dan QR sosial media di struk.",
-    active: false,
-  },
-];
 
 // Seluruh data awal dikosongkan (0 data) agar siap diisi data bisnis asli
 export const INITIAL_PRODUCTS: Product[] = [];
@@ -139,9 +34,8 @@ export const INITIAL_EXPENSES: ExpenseRecord[] = [];
 
 export const INITIAL_SHIFTS: CashShiftRecord[] = [];
 
-export const INITIAL_EMPLOYEES: EmployeeMember[] = [];
-
-export const INITIAL_SUBSCRIPTION_PAYMENTS: SubscriptionPaymentRecord[] = [];
+// Akun Owner & Kasir dibuat oleh Super Admin (mulai dari 0 akun)
+export const INITIAL_MANAGED_ACCOUNTS: ManagedAccount[] = [];
 
 export const INITIAL_AUDIT_LOGS: AuditLogEntry[] = [];
 
@@ -159,9 +53,13 @@ export const INITIAL_STORE_SETTINGS: StoreSettings = {
   whatsappReceiptEnabled: true,
   printerPaperSize: "58mm",
   autoPrintReceipt: false,
+  // Metode Pembayaran yang dikelola oleh Owner
+  cashEnabled: true,
+  qrisEnabled: false,
+  qrisMerchantName: "",
+  qrisImageDataUrl: "",
+  transferChannels: [],
 };
-
-export const INITIAL_PLATFORM_TENANTS: PlatformTenantSummary[] = [];
 
 export const HOURLY_SALES_CHART = [
   { hour: "08.00", today: 0, yesterday: 0 },

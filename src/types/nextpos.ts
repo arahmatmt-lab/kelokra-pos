@@ -1,16 +1,6 @@
 export type UserRole = "OWNER" | "CASHIER" | "SUPER_ADMIN";
 
-export type PlanCode = "FREE_TRIAL" | "STARTER" | "PRO" | "BUSINESS";
-
-export type SubscriptionStatus =
-  | "TRIALING"
-  | "ACTIVE"
-  | "PAST_DUE"
-  | "GRACE_PERIOD"
-  | "EXPIRED"
-  | "CANCELLED";
-
-export type PaymentMethod = "Tunai" | "QRIS" | "Kartu" | "E-Wallet";
+export type PaymentMethod = "Tunai" | "QRIS" | "M-Banking / E-Wallet";
 
 export type ProductCategory = "Minuman" | "Makanan" | "Snack" | "Lainnya";
 
@@ -26,7 +16,7 @@ export interface Product {
   stock: number;
   minStock: number;
   unit: string;
-  image: string; // SVG data URI or illustration key
+  image: string;
   soldCount: number;
   isActive: boolean;
 }
@@ -34,7 +24,7 @@ export interface Product {
 export interface CartItem {
   product: Product;
   quantity: number;
-  discount: number; // per-item discount in IDR
+  discount: number;
 }
 
 export interface HeldTransaction {
@@ -52,7 +42,7 @@ export interface SaleItemSnapshot {
   sku: string;
   quantity: number;
   unitPrice: number;
-  unitCost: number; // HPP snapshot at time of transaction (Bab 9.1)
+  unitCost: number;
   discount: number;
   subtotal: number;
 }
@@ -74,10 +64,11 @@ export interface SaleTransaction {
   totalHpp: number;
   netProfit: number;
   paymentMethod: PaymentMethod;
+  paymentDetail?: string; // e.g., "BCA - 1234567890" or "DANA - 0812xxx" or "QRIS"
   cashReceived: number;
   changeAmount: number;
   status: "COMPLETED" | "VOIDED" | "RETURNED";
-  synced: boolean; // true if synced with cloud, false if queued offline
+  synced: boolean;
 }
 
 export interface StockMovement {
@@ -126,13 +117,13 @@ export interface ReturnRecord {
   id: string;
   returnNumber: string;
   type: "CUSTOMER_RETURN" | "SUPPLIER_RETURN";
-  referenceNumber: string; // Invoice or PO number
+  referenceNumber: string;
   productId: string;
   productName: string;
   quantity: number;
   refundAmount: number;
   reason: string;
-  restockEligible: boolean; // Bab 9.2: Retur pelanggan menambah stok hanya jika layak jual kembali
+  restockEligible: boolean;
   createdAt: string;
 }
 
@@ -149,7 +140,13 @@ export interface Customer {
 
 export interface ExpenseRecord {
   id: string;
-  category: "Operasional" | "Bahan Baku" | "Gaji & Komisi" | "Sewa & Utilitas" | "Pemasaran" | "Lainnya";
+  category:
+    | "Operasional"
+    | "Bahan Baku"
+    | "Gaji & Komisi"
+    | "Sewa & Utilitas"
+    | "Pemasaran"
+    | "Lainnya";
   description: string;
   amount: number;
   date: string;
@@ -170,46 +167,29 @@ export interface CashShiftRecord {
   notes?: string;
 }
 
-export interface EmployeeMember {
+export interface ManagedAccount {
   id: string;
   name: string;
   username: string;
+  password: string;
   email: string;
-  role: "Owner" | "Kasir";
-  status: "Aktif" | "Menunggu Undangan" | "Nonaktif";
-  lastLogin: string;
+  role: "OWNER" | "CASHIER";
+  storeName: string;
+  durationMonths: number;
+  createdAt: string; // ISO string
+  expiresAt: string; // ISO string
+  status: "AKTIF" | "NONAKTIF";
   avatarColor: string;
-  permissions: string[];
+  lastLogin: string;
 }
 
-export interface SubscriptionPlanInfo {
-  code: PlanCode;
-  name: string;
-  monthlyPrice: number;
-  yearlyPrice: number;
-  maxCashiers: number;
-  maxProducts: number;
-  badge?: string;
-  description: string;
-  features: string[];
-}
-
-export interface SubscriptionPaymentRecord {
+export interface TransferPaymentChannel {
   id: string;
-  date: string;
-  planName: string;
-  amount: number;
-  method: string;
-  status: "Berhasil" | "Menunggu" | "Gagal";
-  invoiceNumber: string;
-}
-
-export interface AddOnItem {
-  id: string;
-  name: string;
-  priceMonthly: number;
-  description: string;
-  active: boolean;
+  type: "M-Banking" | "E-Wallet";
+  bankOrProviderName: string;
+  accountNumber: string;
+  accountHolder: string;
+  isActive: boolean;
 }
 
 export interface AuditLogEntry {
@@ -236,19 +216,10 @@ export interface StoreSettings {
   whatsappReceiptEnabled: boolean;
   printerPaperSize: "58mm" | "80mm";
   autoPrintReceipt: boolean;
-}
-
-export interface PlatformTenantSummary {
-  id: string;
-  businessName: string;
-  ownerName: string;
-  ownerEmail: string;
-  businessType: string;
-  plan: PlanCode;
-  status: SubscriptionStatus;
-  cashierCount: number;
-  maxCashiers: number;
-  mrrContribution: number;
-  joinedDate: string;
-  periodEnd: string;
+  // Payment Methods managed by Owner
+  cashEnabled: boolean;
+  qrisEnabled: boolean;
+  qrisMerchantName: string;
+  qrisImageDataUrl: string;
+  transferChannels: TransferPaymentChannel[];
 }

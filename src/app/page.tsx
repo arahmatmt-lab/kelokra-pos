@@ -11,10 +11,10 @@ import {
   BarChart3,
   Wallet,
   UserCog,
-  Crown,
+  CreditCard,
   Settings,
   HelpCircle,
-  ShieldAlert,
+  ShieldCheck,
   Search,
   Bell,
   ChevronDown,
@@ -23,35 +23,30 @@ import {
   RefreshCw,
   Menu,
   X,
+  Clock,
   CheckCircle2,
 } from "lucide-react";
 import {
-  AddOnItem,
   AuditLogEntry,
   CashShiftRecord,
   Customer,
-  EmployeeMember,
   ExpenseRecord,
-  PlanCode,
-  PlatformTenantSummary,
+  ManagedAccount,
   Product,
   PurchaseOrder,
   ReturnRecord,
   SaleTransaction,
   StockMovement,
   StoreSettings,
-  SubscriptionPaymentRecord,
   Supplier,
   UserRole,
 } from "@/types/nextpos";
 import {
   DEFAULT_TENANT_ID,
-  INITIAL_ADDONS,
   INITIAL_AUDIT_LOGS,
   INITIAL_CUSTOMERS,
-  INITIAL_EMPLOYEES,
   INITIAL_EXPENSES,
-  INITIAL_PLATFORM_TENANTS,
+  INITIAL_MANAGED_ACCOUNTS,
   INITIAL_PRODUCTS,
   INITIAL_PURCHASES,
   INITIAL_RETURNS,
@@ -59,11 +54,16 @@ import {
   INITIAL_SHIFTS,
   INITIAL_STOCK_MOVEMENTS,
   INITIAL_STORE_SETTINGS,
-  INITIAL_SUBSCRIPTION_PAYMENTS,
   INITIAL_SUPPLIERS,
-  SUBSCRIPTION_PLANS,
 } from "@/lib/initial-data";
-import { formatIDR, formatShortTime, generateId } from "@/lib/format";
+import {
+  addMonthsToIso,
+  formatDateOnly,
+  formatIDR,
+  formatShortTime,
+  generateId,
+  getRemainingTimeInfo,
+} from "@/lib/format";
 import { DashboardView } from "@/components/views/DashboardView";
 import { PosView } from "@/components/views/PosView";
 import { ProductsInventoryView } from "@/components/views/ProductsInventoryView";
@@ -71,13 +71,14 @@ import { ReportsFinanceView } from "@/components/views/ReportsFinanceView";
 import { SaasSettingsAdminView } from "@/components/views/SaasSettingsAdminView";
 import { LandingAuthModal } from "@/components/LandingAuthModal";
 
-const STORAGE_KEY = "kelokra_saas_state_v1";
+const STORAGE_KEY = "kelokra_saas_state_v2";
 
 export default function KelokraApp() {
   // Navigation & RBAC state
   const [activeMenu, setActiveMenu] = useState<string>("dashboard");
   const [currentRole, setCurrentRole] = useState<UserRole>("OWNER");
   const [currentUserName, setCurrentUserName] = useState<string>("Owner");
+  const [activeAccountId, setActiveAccountId] = useState<string | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
@@ -105,24 +106,14 @@ export default function KelokraApp() {
   const [customers, setCustomers] = useState<Customer[]>(INITIAL_CUSTOMERS);
   const [expenses, setExpenses] = useState<ExpenseRecord[]>(INITIAL_EXPENSES);
   const [shifts, setShifts] = useState<CashShiftRecord[]>(INITIAL_SHIFTS);
-  const [employees, setEmployees] =
-    useState<EmployeeMember[]>(INITIAL_EMPLOYEES);
-  const [currentPlan, setCurrentPlan] = useState<PlanCode>("PRO");
-  const [billingCycle, setBillingCycle] = useState<"MONTHLY" | "YEARLY">(
-    "MONTHLY"
+  const [accounts, setAccounts] = useState<ManagedAccount[]>(
+    INITIAL_MANAGED_ACCOUNTS
   );
-  const [subscriptionPayments, setSubscriptionPayments] = useState<
-    SubscriptionPaymentRecord[]
-  >(INITIAL_SUBSCRIPTION_PAYMENTS);
-  const [addons, setAddons] = useState<AddOnItem[]>(INITIAL_ADDONS);
   const [storeSettings, setStoreSettings] = useState<StoreSettings>(
     INITIAL_STORE_SETTINGS
   );
   const [auditLogs, setAuditLogs] =
     useState<AuditLogEntry[]>(INITIAL_AUDIT_LOGS);
-  const [platformTenants, setPlatformTenants] = useState<
-    PlatformTenantSummary[]
-  >(INITIAL_PLATFORM_TENANTS);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -131,10 +122,11 @@ export default function KelokraApp() {
     }, 3500);
   };
 
-  // Clear old NEXTPOS dummy storage key & load KELOKRA state
+  // Load persisted state from localStorage
   useEffect(() => {
     try {
       localStorage.removeItem("nextpos_saas_state_v1_1");
+      localStorage.removeItem("kelokra_saas_state_v1");
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
@@ -147,9 +139,13 @@ export default function KelokraApp() {
         if (parsed.customers) setCustomers(parsed.customers);
         if (parsed.expenses) setExpenses(parsed.expenses);
         if (parsed.shifts) setShifts(parsed.shifts);
-        if (parsed.employees) setEmployees(parsed.employees);
-        if (parsed.currentPlan) setCurrentPlan(parsed.currentPlan);
-        if (parsed.storeSettings) setStoreSettings(parsed.storeSettings);
+        if (parsed.accounts) setAccounts(parsed.accounts);
+        if (parsed.storeSettings) {
+          setStoreSettings({
+            ...INITIAL_STORE_SETTINGS,
+            ...parsed.storeSettings,
+          });
+        }
         if (parsed.auditLogs) setAuditLogs(parsed.auditLogs);
       }
     } catch {
@@ -185,8 +181,7 @@ export default function KelokraApp() {
           customers,
           expenses,
           shifts,
-          employees,
-          currentPlan,
+          accounts,
           storeSettings,
           auditLogs,
         })
@@ -204,8 +199,7 @@ export default function KelokraApp() {
     customers,
     expenses,
     shifts,
-    employees,
-    currentPlan,
+    accounts,
     storeSettings,
     auditLogs,
   ]);
@@ -257,7 +251,7 @@ export default function KelokraApp() {
         quantity: -item.quantity,
         balanceAfter,
         reference: sale.invoiceNumber,
-        reason: `Penjualan POS (${sale.paymentMethod})`,
+        reason: `Penjualan POS (${sale.paymentDetail || sale.paymentMethod})`,
         actor: sale.cashierName,
         createdAt: `${new Date().toLocaleDateString("id-ID")} ${formatShortTime()}`,
       };
@@ -283,7 +277,7 @@ export default function KelokraApp() {
       "POS",
       `Transaksi ${sale.invoiceNumber} senilai ${formatIDR(
         sale.grandTotal
-      )} (${sale.paymentMethod}) selesai.`
+      )} (${sale.paymentDetail || sale.paymentMethod}) selesai.`
     );
 
     if (isOnline) {
@@ -561,42 +555,43 @@ export default function KelokraApp() {
     showToast(`Retur ${ret.returnNumber} berhasil dicatat!`);
   };
 
-  // Handler 6: Role Switcher & Onboarding Trial Registration
-  const handleSelectRole = (
-    role: UserRole,
-    customName?: string,
-    customStore?: string
-  ) => {
+  // Handler 6: Role Switcher & Login into Super-Admin Created Account
+  const handleSelectRole = (role: UserRole, customAccount?: ManagedAccount) => {
     setCurrentRole(role);
+
+    if (customAccount) {
+      setActiveAccountId(customAccount.id);
+      setCurrentUserName(customAccount.name);
+      setStoreSettings((prev) => ({
+        ...prev,
+        storeName: customAccount.storeName || prev.storeName,
+      }));
+      setAccounts((prev) =>
+        prev.map((a) =>
+          a.id === customAccount.id
+            ? {
+                ...a,
+                lastLogin: `${new Date().toLocaleDateString(
+                  "id-ID"
+                )} ${formatShortTime()}`,
+              }
+            : a
+        )
+      );
+      setActiveMenu(role === "CASHIER" ? "pos" : "dashboard");
+      showToast(
+        `Login berhasil sebagai ${customAccount.name} (${
+          role === "OWNER" ? "Owner" : "Kasir"
+        })`
+      );
+      return;
+    }
+
+    setActiveAccountId(null);
     if (role === "OWNER") {
-      setCurrentUserName(customName || "Owner");
-      if (customStore) {
-        setStoreSettings((prev) => ({ ...prev, storeName: customStore }));
-        setCurrentPlan("FREE_TRIAL");
-        setPlatformTenants((prev) => [
-          {
-            id: generateId("tenant"),
-            businessName: customStore,
-            ownerName: customName || "Owner",
-            ownerEmail: "owner@bisnis.id",
-            businessType: "UMKM / Ritel",
-            plan: "FREE_TRIAL",
-            status: "TRIALING",
-            cashierCount: 1,
-            maxCashiers: 1,
-            mrrContribution: 0,
-            joinedDate: new Date().toLocaleDateString("id-ID"),
-            periodEnd: "Trial 14 Hari",
-          },
-          ...prev,
-        ]);
-        showToast(
-          `Selamat datang! Tenant "${customStore}" aktif dengan Trial Gratis 14 Hari.`
-        );
-      } else {
-        showToast("Berpindah ke akun Owner Bisnis");
-      }
+      setCurrentUserName("Owner");
       setActiveMenu("dashboard");
+      showToast("Berpindah ke tampilan Owner Bisnis");
     } else if (role === "CASHIER") {
       setCurrentUserName("Kasir");
       setActiveMenu("pos");
@@ -604,10 +599,18 @@ export default function KelokraApp() {
     } else {
       setCurrentUserName("Super Admin KELOKRA");
       setActiveMenu("super-admin");
-      showToast("Berpindah ke Dashboard Super Admin Platform SaaS");
+      showToast("Berpindah ke Panel Super Admin KELOKRA");
     }
   };
 
+  const activeAccount = activeAccountId
+    ? accounts.find((a) => a.id === activeAccountId) || null
+    : null;
+  const activeAccountTime = activeAccount
+    ? getRemainingTimeInfo(activeAccount.expiresAt)
+    : null;
+
+  // Navigation items filtered by Role (NO Langganan menu!)
   const navItems = [
     {
       id: "dashboard",
@@ -658,28 +661,25 @@ export default function KelokraApp() {
       roles: ["OWNER", "CASHIER"],
     },
     {
+      id: "payment-methods",
+      label: "Metode Pembayaran",
+      icon: CreditCard,
+      roles: ["OWNER"],
+    },
+    {
       id: "employees",
-      label: "Karyawan",
+      label: "Daftar Akun",
       icon: UserCog,
       roles: ["OWNER"],
     },
     {
-      id: "subscription",
-      label: "Langganan",
-      icon: Crown,
-      roles: ["OWNER"],
-    },
-    {
       id: "super-admin",
-      label: "Platform SaaS",
-      icon: ShieldAlert,
-      roles: ["OWNER", "SUPER_ADMIN"],
+      label: "Super Admin",
+      icon: ShieldCheck,
+      // Visible to SUPER_ADMIN, and also visible in default preview mode (!activeAccount) for easy switching
+      roles: activeAccount ? ["SUPER_ADMIN"] : ["OWNER", "SUPER_ADMIN"],
     },
   ].filter((item) => item.roles.includes(currentRole));
-
-  const activePlanInfo =
-    SUBSCRIPTION_PLANS.find((p) => p.code === currentPlan) ||
-    SUBSCRIPTION_PLANS[2];
 
   const lowStockCount = products.filter((p) => p.stock <= p.minStock).length;
 
@@ -743,7 +743,7 @@ export default function KelokraApp() {
           </nav>
         </div>
 
-        {/* Bottom Sidebar Widgets */}
+        {/* Bottom Sidebar Widgets (Replaced Langganan with Account Remaining Time + Offline Sync) */}
         <div className="p-4 space-y-3 border-t border-white/10">
           <div className="p-3 rounded-xl bg-white/5 border border-white/10 space-y-2">
             <div className="flex items-center justify-between">
@@ -775,19 +775,34 @@ export default function KelokraApp() {
             </p>
           </div>
 
-          <div className="p-3.5 rounded-2xl bg-gradient-to-br from-emerald-950/90 to-navy-900 border border-emerald-500/30 flex items-center justify-between gap-2">
-            <div>
-              <p className="text-xs font-extrabold text-white">
-                {activePlanInfo.name}
-              </p>
-              <p className="text-[10px] text-slate-300 mt-0.5">Status: Aktif</p>
+          {/* Masa Aktif Akun Card (NO Langganan / NO Upgrade!) */}
+          <div className="p-3.5 rounded-2xl bg-gradient-to-br from-emerald-950/90 to-navy-900 border border-emerald-500/30 space-y-1">
+            <div className="flex items-center gap-1.5 text-emerald-400 text-[11px] font-extrabold">
+              <Clock className="w-3.5 h-3.5" />
+              <span>
+                {activeAccount
+                  ? "Masa Aktif Akun"
+                  : currentRole === "SUPER_ADMIN"
+                  ? "Super Admin Aktif"
+                  : "Status Akses Role"}
+              </span>
             </div>
-            <button
-              onClick={() => setActiveMenu("subscription")}
-              className="px-3 py-1.5 rounded-lg bg-[#10B981] hover:bg-emerald-600 text-white text-xs font-extrabold shadow-xs transition"
-            >
-              Upgrade
-            </button>
+            {activeAccount && activeAccountTime ? (
+              <>
+                <p className="text-xs font-extrabold text-white">
+                  {activeAccountTime.label}
+                </p>
+                <p className="text-[10px] text-slate-300">
+                  Berakhir: {formatDateOnly(activeAccount.expiresAt)}
+                </p>
+              </>
+            ) : (
+              <p className="text-[11px] text-slate-300">
+                {currentRole === "SUPER_ADMIN"
+                  ? `${accounts.length} akun Owner & Kasir dikelola`
+                  : "Gunakan Super Admin untuk buat akun berdurasi"}
+              </p>
+            )}
           </div>
 
           <div className="space-y-1 pt-1">
@@ -924,7 +939,7 @@ export default function KelokraApp() {
               onClick={() => setShowAuthModal(true)}
               className="px-3 py-1.5 rounded-xl bg-navy-800 hover:bg-navy-700 text-white text-xs font-bold transition hidden sm:flex items-center gap-1.5"
             >
-              <span>Ganti Role / Trial</span>
+              <span>Ganti Role / Login</span>
             </button>
 
             <div className="relative">
@@ -1125,79 +1140,72 @@ export default function KelokraApp() {
           )}
 
           {(activeMenu === "employees" ||
-            activeMenu === "subscription" ||
+            activeMenu === "payment-methods" ||
             activeMenu === "settings" ||
             activeMenu === "help" ||
             activeMenu === "super-admin") && (
             <SaasSettingsAdminView
               mode={activeMenu}
-              employees={employees}
-              currentPlan={currentPlan}
-              billingCycle={billingCycle}
-              subscriptionPayments={subscriptionPayments}
-              addons={addons}
+              accounts={accounts}
               storeSettings={storeSettings}
               auditLogs={auditLogs}
-              platformTenants={platformTenants}
-              onAddEmployee={(emp) => {
-                setEmployees((prev) => [...prev, emp]);
+              onCreateAccount={(acc) => {
+                setAccounts((prev) => [acc, ...prev]);
                 appendAudit(
-                  "CASHIER_INVITED",
-                  "Karyawan",
-                  `Mengundang & mengaktifkan akun kasir ${emp.name} (${emp.email}).`
+                  "ACCOUNT_CREATED",
+                  "Super Admin",
+                  `Super Admin membuat akun ${acc.role} (${acc.name} / @${acc.username}) dengan durasi ${acc.durationMonths} bulan.`
                 );
-                showToast(`Akun kasir "${emp.name}" berhasil ditambahkan!`);
-              }}
-              onRemoveEmployee={(empId) => {
-                setEmployees((prev) => prev.filter((e) => e.id !== empId));
-                showToast("Akun kasir dinonaktifkan.");
-              }}
-              onChangePlan={(planCode, cycle) => {
-                setCurrentPlan(planCode);
-                setBillingCycle(cycle);
-                const planObj = SUBSCRIPTION_PLANS.find(
-                  (p) => p.code === planCode
+                showToast(
+                  `Akun ${acc.role === "OWNER" ? "Owner" : "Kasir"} "${
+                    acc.name
+                  }" aktif selama ${acc.durationMonths} bulan!`
                 );
-                if (planObj && planObj.monthlyPrice > 0) {
-                  const amount =
-                    cycle === "MONTHLY"
-                      ? planObj.monthlyPrice
-                      : planObj.yearlyPrice;
-                  setSubscriptionPayments((prev) => [
-                    {
-                      id: generateId("subpay"),
-                      date: new Date().toLocaleDateString("id-ID"),
-                      planName: `${planObj.name} (${
-                        cycle === "MONTHLY" ? "Bulanan" : "Tahunan"
-                      })`,
-                      amount,
-                      method: "QRIS / Virtual Account",
-                      status: "Berhasil",
-                      invoiceNumber: `INV-SAAS-${Math.floor(
-                        100000 + Math.random() * 899999
-                      )}`,
-                    },
-                    ...prev,
-                  ]);
-                }
+              }}
+              onExtendAccount={(accountId, addMonths) => {
+                setAccounts((prev) =>
+                  prev.map((a) => {
+                    if (a.id !== accountId) return a;
+                    const base =
+                      new Date(a.expiresAt).getTime() > Date.now()
+                        ? a.expiresAt
+                        : new Date().toISOString();
+                    return {
+                      ...a,
+                      durationMonths: a.durationMonths + addMonths,
+                      expiresAt: addMonthsToIso(base, addMonths),
+                      status: "AKTIF",
+                    };
+                  })
+                );
                 appendAudit(
-                  "SUBSCRIPTION_UPDATED",
-                  "Langganan",
-                  `Mengubah paket langganan ke ${planCode} (${cycle}).`
+                  "ACCOUNT_EXTENDED",
+                  "Super Admin",
+                  `Super Admin memperpanjang masa aktif akun selama +${addMonths} bulan.`
                 );
-                showToast(`Paket langganan diperbarui ke ${planCode}!`);
+                showToast(`Masa aktif akun diperpanjang +${addMonths} bulan!`);
               }}
-              onToggleAddon={(addonId) => {
-                setAddons((prev) =>
+              onToggleAccountStatus={(accountId) => {
+                setAccounts((prev) =>
                   prev.map((a) =>
-                    a.id === addonId ? { ...a, active: !a.active } : a
+                    a.id === accountId
+                      ? {
+                          ...a,
+                          status: a.status === "AKTIF" ? "NONAKTIF" : "AKTIF",
+                        }
+                      : a
                   )
                 );
-                showToast("Status Add-on diperbarui!");
+                showToast("Status aktif akun diperbarui!");
               }}
+              onDeleteAccount={(accountId) => {
+                setAccounts((prev) => prev.filter((a) => a.id !== accountId));
+                showToast("Akun berhasil dihapus oleh Super Admin.");
+              }}
+              onLoginAsAccount={(acc) => handleSelectRole(acc.role, acc)}
               onUpdateSettings={(next) => {
                 setStoreSettings(next);
-                showToast("Pengaturan sistem berhasil disimpan!");
+                showToast("Pengaturan & metode pembayaran berhasil disimpan!");
               }}
               onExportBackup={() => {
                 const payload = {
@@ -1210,6 +1218,7 @@ export default function KelokraApp() {
                   suppliers,
                   customers,
                   expenses,
+                  accounts,
                 };
                 const blob = new Blob([JSON.stringify(payload, null, 2)], {
                   type: "application/json",
@@ -1224,7 +1233,7 @@ export default function KelokraApp() {
                 URL.revokeObjectURL(url);
                 showToast("File Backup JSON berhasil diunduh!");
               }}
-              onResetDemoData={() => {
+              onResetAllData={() => {
                 localStorage.removeItem(STORAGE_KEY);
                 setProducts([]);
                 setSales([]);
@@ -1235,10 +1244,9 @@ export default function KelokraApp() {
                 setCustomers([]);
                 setExpenses([]);
                 setShifts([]);
-                setEmployees([]);
-                setSubscriptionPayments([]);
+                setAccounts([]);
                 setAuditLogs([]);
-                setPlatformTenants([]);
+                setActiveAccountId(null);
                 setStoreSettings(INITIAL_STORE_SETTINGS);
                 showToast("Seluruh data berhasil dikosongkan!");
               }}
@@ -1255,10 +1263,11 @@ export default function KelokraApp() {
         </div>
       )}
 
-      {/* LANDING / AUTH / ROLE SWITCHER MODAL */}
+      {/* LANDING / LOGIN / ROLE SWITCHER MODAL */}
       <LandingAuthModal
         isOpen={showAuthModal}
         currentRole={currentRole}
+        accounts={accounts}
         onClose={() => setShowAuthModal(false)}
         onSelectRole={handleSelectRole}
       />

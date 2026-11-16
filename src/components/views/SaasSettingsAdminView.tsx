@@ -6,8 +6,6 @@ import {
   Edit3,
   Trash2,
   CheckCircle2,
-  Crown,
-  ArrowRight,
   Settings,
   CreditCard,
   Bell,
@@ -16,67 +14,69 @@ import {
   DatabaseBackup,
   HelpCircle,
   Building2,
-  TrendingUp,
   Users,
   Download,
   RotateCcw,
+  QrCode,
+  Upload,
+  Banknote,
+  Clock,
+  Eye,
+  EyeOff,
+  LogIn,
+  CalendarPlus,
+  UserPlus,
+  Info,
   X,
 } from "lucide-react";
 import {
-  AddOnItem,
   AuditLogEntry,
-  EmployeeMember,
-  PlanCode,
-  PlatformTenantSummary,
+  ManagedAccount,
   StoreSettings,
-  SubscriptionPaymentRecord,
+  TransferPaymentChannel,
 } from "@/types/nextpos";
-import { SUBSCRIPTION_PLANS } from "@/lib/initial-data";
-import { formatIDR, generateId } from "@/lib/format";
+import {
+  addMonthsToIso,
+  formatDateOnly,
+  generateId,
+  getRemainingTimeInfo,
+} from "@/lib/format";
 
 interface SaasSettingsAdminViewProps {
-  mode: "employees" | "subscription" | "settings" | "help" | "super-admin";
-  employees: EmployeeMember[];
-  currentPlan: PlanCode;
-  billingCycle: "MONTHLY" | "YEARLY";
-  subscriptionPayments: SubscriptionPaymentRecord[];
-  addons: AddOnItem[];
+  mode:
+    | "employees"
+    | "payment-methods"
+    | "settings"
+    | "help"
+    | "super-admin";
+  accounts: ManagedAccount[];
   storeSettings: StoreSettings;
   auditLogs: AuditLogEntry[];
-  platformTenants: PlatformTenantSummary[];
-  onAddEmployee: (emp: EmployeeMember) => void;
-  onRemoveEmployee: (empId: string) => void;
-  onChangePlan: (plan: PlanCode, cycle: "MONTHLY" | "YEARLY") => void;
-  onToggleAddon: (addonId: string) => void;
+  onCreateAccount: (acc: ManagedAccount) => void;
+  onExtendAccount: (accountId: string, addMonths: number) => void;
+  onToggleAccountStatus: (accountId: string) => void;
+  onDeleteAccount: (accountId: string) => void;
+  onLoginAsAccount: (acc: ManagedAccount) => void;
   onUpdateSettings: (next: StoreSettings) => void;
   onExportBackup: () => void;
-  onResetDemoData: () => void;
+  onResetAllData: () => void;
 }
 
 export function SaasSettingsAdminView({
   mode,
-  employees,
-  currentPlan,
-  billingCycle,
-  subscriptionPayments,
-  addons,
+  accounts,
   storeSettings,
   auditLogs,
-  platformTenants,
-  onAddEmployee,
-  onRemoveEmployee,
-  onChangePlan,
-  onToggleAddon,
+  onCreateAccount,
+  onExtendAccount,
+  onToggleAccountStatus,
+  onDeleteAccount,
+  onLoginAsAccount,
   onUpdateSettings,
   onExportBackup,
-  onResetDemoData,
+  onResetAllData,
 }: SaasSettingsAdminViewProps) {
-  const [showEmpModal, setShowEmpModal] = useState(false);
-  const [empName, setEmpName] = useState("");
-  const [empEmail, setEmpEmail] = useState("");
-  const [empUsername, setEmpUsername] = useState("");
-  const [empError, setEmpError] = useState<string | null>(null);
-
+  // Settings sub-tab
   const [settingsTab, setSettingsTab] = useState<
     "Umum" | "Pembayaran" | "Notifikasi" | "Keamanan" | "Integrasi" | "Backup"
   >("Umum");
@@ -85,163 +85,620 @@ export function SaasSettingsAdminView({
   const [tempAddress, setTempAddress] = useState(storeSettings.address);
   const [tempPhone, setTempPhone] = useState(storeSettings.phone);
 
-  const activePlanObj =
-    SUBSCRIPTION_PLANS.find((p) => p.code === currentPlan) ||
-    SUBSCRIPTION_PLANS[2];
+  // Payment Method Channel Modal (Owner adds M-Banking / E-Wallet)
+  const [showChannelModal, setShowChannelModal] = useState(false);
+  const [editingChannelId, setEditingChannelId] = useState<string | null>(null);
+  const [chType, setChType] = useState<"M-Banking" | "E-Wallet">("M-Banking");
+  const [chBankName, setChBankName] = useState("");
+  const [chAccountNumber, setChAccountNumber] = useState("");
+  const [chAccountHolder, setChAccountHolder] = useState("");
 
-  const extraCashierAddon = addons.find(
-    (a) => a.id === "addon-cashier" && a.active
-  );
-  const maxAllowedCashiers =
-    activePlanObj.maxCashiers + (extraCashierAddon ? 1 : 0);
-  const currentCashierCount = employees.filter(
-    (e) => e.role === "Kasir"
-  ).length;
+  // Super Admin Account Creation Modal
+  const [showAccountModal, setShowAccountModal] = useState(false);
+  const [accName, setAccName] = useState("");
+  const [accRole, setAccRole] = useState<"OWNER" | "CASHIER">("OWNER");
+  const [accStoreName, setAccStoreName] = useState(storeSettings.storeName);
+  const [accUsername, setAccUsername] = useState("");
+  const [accPassword, setAccPassword] = useState("");
+  const [accEmail, setAccEmail] = useState("");
+  const [accDurationMonths, setAccDurationMonths] = useState<number>(12); // default 1 tahun (12 bulan)
+  const [accError, setAccError] = useState<string | null>(null);
+  const [visiblePasswords, setVisiblePasswords] = useState<
+    Record<string, boolean>
+  >({});
 
-  const handleInviteCashier = (e: React.FormEvent) => {
-    e.preventDefault();
-    setEmpError(null);
+  // Extend Duration Modal
+  const [extendTargetAccount, setExtendTargetAccount] =
+    useState<ManagedAccount | null>(null);
+  const [extendMonths, setExtendMonths] = useState<number>(1);
 
-    if (currentCashierCount >= maxAllowedCashiers) {
-      setEmpError(
-        `Kuota kasir pada ${activePlanObj.name} penuh (${currentCashierCount}/${maxAllowedCashiers}). Silakan Upgrade Paket atau aktifkan Add-on Kasir Tambahan.`
-      );
+  // Handle QRIS image upload to Base64 Data URL
+  const handleQrisFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      alert("Ukuran gambar QRIS maksimal 2 MB.");
       return;
     }
-
-    onAddEmployee({
-      id: generateId("emp"),
-      name: empName.trim(),
-      username:
-        empUsername.trim() ||
-        empName.toLowerCase().replace(/\s+/g, ".") + ".kasir",
-      email: empEmail.trim(),
-      role: "Kasir",
-      status: "Aktif",
-      lastLogin: new Date().toLocaleDateString("id-ID"),
-      avatarColor: "#10B981",
-      permissions: [
-        "pos.access",
-        "shift.manage_own",
-        "receipt.print",
-        "products.view",
-      ],
-    });
-    setEmpName("");
-    setEmpEmail("");
-    setEmpUsername("");
-    setShowEmpModal(false);
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        onUpdateSettings({
+          ...storeSettings,
+          qrisEnabled: true,
+          qrisImageDataUrl: reader.result,
+        });
+      }
+    };
+    reader.readAsDataURL(file);
   };
 
+  const openAddChannel = () => {
+    setEditingChannelId(null);
+    setChType("M-Banking");
+    setChBankName("");
+    setChAccountNumber("");
+    setChAccountHolder("");
+    setShowChannelModal(true);
+  };
+
+  const openEditChannel = (ch: TransferPaymentChannel) => {
+    setEditingChannelId(ch.id);
+    setChType(ch.type);
+    setChBankName(ch.bankOrProviderName);
+    setChAccountNumber(ch.accountNumber);
+    setChAccountHolder(ch.accountHolder);
+    setShowChannelModal(true);
+  };
+
+  const handleSaveChannel = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!chBankName.trim() || !chAccountNumber.trim()) return;
+
+    const existing = storeSettings.transferChannels || [];
+    let updated: TransferPaymentChannel[];
+    if (editingChannelId) {
+      updated = existing.map((c) =>
+        c.id === editingChannelId
+          ? {
+              ...c,
+              type: chType,
+              bankOrProviderName: chBankName.trim(),
+              accountNumber: chAccountNumber.trim(),
+              accountHolder: chAccountHolder.trim(),
+            }
+          : c
+      );
+    } else {
+      updated = [
+        ...existing,
+        {
+          id: generateId("pay"),
+          type: chType,
+          bankOrProviderName: chBankName.trim(),
+          accountNumber: chAccountNumber.trim(),
+          accountHolder: chAccountHolder.trim(),
+          isActive: true,
+        },
+      ];
+    }
+
+    onUpdateSettings({
+      ...storeSettings,
+      transferChannels: updated,
+    });
+    setShowChannelModal(false);
+  };
+
+  const handleToggleChannel = (channelId: string) => {
+    const updated = (storeSettings.transferChannels || []).map((c) =>
+      c.id === channelId ? { ...c, isActive: !c.isActive } : c
+    );
+    onUpdateSettings({
+      ...storeSettings,
+      transferChannels: updated,
+    });
+  };
+
+  const handleDeleteChannel = (channelId: string) => {
+    const updated = (storeSettings.transferChannels || []).filter(
+      (c) => c.id !== channelId
+    );
+    onUpdateSettings({
+      ...storeSettings,
+      transferChannels: updated,
+    });
+  };
+
+  // Reusable Payment Method Editor Component (used in both "payment-methods" menu and Settings -> Pembayaran)
+  const renderPaymentMethodsEditor = () => (
+    <div className="space-y-6">
+      {/* 1. Tunai */}
+      <div className="p-5 rounded-2xl border border-slate-200/80 bg-white flex items-center justify-between gap-4">
+        <div className="flex items-center gap-3.5">
+          <div className="w-11 h-11 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
+            <Banknote className="w-6 h-6" />
+          </div>
+          <div>
+            <h3 className="text-sm sm:text-base font-extrabold text-navy-800">
+              Pembayaran Tunai (Cash)
+            </h3>
+            <p className="text-xs text-slate-500">
+              Terima pembayaran uang tunai langsung di kasir beserta hitung kembalian otomatis.
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={storeSettings.cashEnabled}
+          onClick={() =>
+            onUpdateSettings({
+              ...storeSettings,
+              cashEnabled: !storeSettings.cashEnabled,
+            })
+          }
+          className={`w-12 h-7 rounded-full transition p-1 flex items-center shrink-0 ${
+            storeSettings.cashEnabled
+              ? "bg-emerald-500 justify-end"
+              : "bg-slate-300 justify-start"
+          }`}
+        >
+          <span className="w-5 h-5 rounded-full bg-white shadow-xs" />
+        </button>
+      </div>
+
+      {/* 2. QRIS + Upload Gambar QRIS */}
+      <div className="p-5 rounded-2xl border border-slate-200/80 bg-white space-y-4">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3.5">
+            <div className="w-11 h-11 rounded-xl bg-sky-50 text-sky-600 flex items-center justify-center shrink-0">
+              <QrCode className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="text-sm sm:text-base font-extrabold text-navy-800">
+                Pembayaran QRIS
+              </h3>
+              <p className="text-xs text-slate-500">
+                Jika diaktifkan, opsi <b>QRIS</b> dan gambar QRIS toko Anda akan muncul di kasir POS.
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            role="switch"
+            aria-checked={storeSettings.qrisEnabled}
+            onClick={() =>
+              onUpdateSettings({
+                ...storeSettings,
+                qrisEnabled: !storeSettings.qrisEnabled,
+              })
+            }
+            className={`w-12 h-7 rounded-full transition p-1 flex items-center shrink-0 ${
+              storeSettings.qrisEnabled
+                ? "bg-emerald-500 justify-end"
+                : "bg-slate-300 justify-start"
+            }`}
+          >
+            <span className="w-5 h-5 rounded-full bg-white shadow-xs" />
+          </button>
+        </div>
+
+        <div className="pt-3 border-t border-slate-100 grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
+          <div className="md:col-span-7 space-y-3">
+            <div>
+              <label className="block text-xs font-bold text-slate-600 mb-1">
+                Nama Merchant QRIS (Opsional)
+              </label>
+              <input
+                type="text"
+                value={storeSettings.qrisMerchantName}
+                onChange={(e) =>
+                  onUpdateSettings({
+                    ...storeSettings,
+                    qrisMerchantName: e.target.value,
+                  })
+                }
+                placeholder="Contoh: KELOKRA Mart / Kedai Kopi"
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs sm:text-sm"
+              />
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2.5">
+              <label className="cursor-pointer px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold inline-flex items-center gap-2 shadow-xs transition">
+                <Upload className="w-4 h-4" />
+                <span>
+                  {storeSettings.qrisImageDataUrl
+                    ? "Ganti Gambar QRIS"
+                    : "Upload Gambar QRIS"}
+                </span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleQrisFileUpload}
+                  className="hidden"
+                />
+              </label>
+
+              {storeSettings.qrisImageDataUrl && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onUpdateSettings({
+                      ...storeSettings,
+                      qrisImageDataUrl: "",
+                    })
+                  }
+                  className="px-3.5 py-2.5 rounded-xl border border-rose-200 text-rose-600 hover:bg-rose-50 text-xs font-bold"
+                >
+                  Hapus Gambar
+                </button>
+              )}
+            </div>
+            <p className="text-[11px] text-slate-400">
+              Format yang didukung: PNG, JPG, JPEG, WebP (maks. 2 MB).
+            </p>
+          </div>
+
+          <div className="md:col-span-5 flex justify-center">
+            {storeSettings.qrisImageDataUrl ? (
+              <div className="p-3 rounded-2xl border border-emerald-200 bg-emerald-50/40 text-center space-y-1.5">
+                <img
+                  src={storeSettings.qrisImageDataUrl}
+                  alt="Preview QRIS"
+                  className="w-36 h-36 object-contain rounded-xl bg-white p-1.5 border border-slate-200 mx-auto"
+                />
+                <span className="text-[11px] font-bold text-emerald-700 block">
+                  Preview QRIS Aktif di Kasir
+                </span>
+              </div>
+            ) : (
+              <div className="w-40 h-40 rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 flex flex-col items-center justify-center text-center p-3 text-slate-400">
+                <QrCode className="w-10 h-10 mb-1.5 opacity-60" />
+                <span className="text-[11px] font-semibold">
+                  Belum ada gambar QRIS diupload
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* 3. M-Banking & E-Wallet (Bisa tulis nama bank apa & nomor rekening) */}
+      <div className="p-5 rounded-2xl border border-slate-200/80 bg-white space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm sm:text-base font-extrabold text-navy-800">
+              E-Wallet & M-Banking (Transfer Bank)
+            </h3>
+            <p className="text-xs text-slate-500">
+              Tambahkan rekening M-Banking (tulis nama bank apa & nomor rekening) atau akun E-Wallet yang akan muncul di kasir.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={openAddChannel}
+            className="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold shadow-xs flex items-center gap-1.5"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Tambah Bank / E-Wallet</span>
+          </button>
+        </div>
+
+        {(storeSettings.transferChannels || []).length === 0 ? (
+          <div className="py-8 text-center text-xs text-slate-400 border border-dashed border-slate-200 rounded-2xl">
+            Belum ada akun M-Banking atau E-Wallet ditambahkan. Klik{" "}
+            <b>+ Tambah Bank / E-Wallet</b> untuk menambahkan nomor rekening atau nomor E-Wallet Anda.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+            {(storeSettings.transferChannels || []).map((ch) => (
+              <div
+                key={ch.id}
+                className={`p-4 rounded-2xl border flex items-start justify-between gap-3 transition ${
+                  ch.isActive
+                    ? "border-emerald-200 bg-emerald-50/30"
+                    : "border-slate-200 bg-slate-50 opacity-70"
+                }`}
+              >
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-navy-800 text-white">
+                      {ch.type}
+                    </span>
+                    <span className="text-sm font-extrabold text-navy-800">
+                      {ch.bankOrProviderName}
+                    </span>
+                  </div>
+                  <p className="text-sm font-mono font-bold text-emerald-700">
+                    No. Rek / ID: {ch.accountNumber}
+                  </p>
+                  {ch.accountHolder && (
+                    <p className="text-xs text-slate-500">
+                      a.n. {ch.accountHolder}
+                    </p>
+                  )}
+                </div>
+
+                <div className="flex flex-col items-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleChannel(ch.id)}
+                    className={`px-2.5 py-1 rounded-full text-[11px] font-bold ${
+                      ch.isActive
+                        ? "bg-emerald-500 text-white"
+                        : "bg-slate-200 text-slate-600"
+                    }`}
+                  >
+                    {ch.isActive ? "Aktif" : "Nonaktif"}
+                  </button>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => openEditChannel(ch)}
+                      title="Edit"
+                      className="p-1.5 rounded-lg text-slate-500 hover:bg-white hover:text-navy-800"
+                    >
+                      <Edit3 className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteChannel(ch.id)}
+                      title="Hapus"
+                      className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-50"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Modal Tambah / Edit M-Banking atau E-Wallet */}
+      {showChannelModal && (
+        <div className="fixed inset-0 z-50 bg-navy-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="text-lg font-extrabold text-navy-800">
+                {editingChannelId
+                  ? "Edit Rekening / E-Wallet"
+                  : "Tambah M-Banking / E-Wallet"}
+              </h3>
+              <button
+                onClick={() => setShowChannelModal(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <form onSubmit={handleSaveChannel} className="space-y-3.5 text-sm">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Jenis Metode
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  {(["M-Banking", "E-Wallet"] as const).map((t) => (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => setChType(t)}
+                      className={`py-2.5 rounded-xl border text-xs font-extrabold transition ${
+                        chType === t
+                          ? "bg-emerald-50 border-emerald-500 text-emerald-700"
+                          : "border-slate-200 text-slate-600"
+                      }`}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  {chType === "M-Banking"
+                    ? "Tulis Nama Bank (Contoh: Bank BCA, BRI, Mandiri, BSI)"
+                    : "Tulis Nama E-Wallet (Contoh: DANA, GoPay, OVO, ShopeePay)"}
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={chBankName}
+                  onChange={(e) => setChBankName(e.target.value)}
+                  placeholder={
+                    chType === "M-Banking"
+                      ? "Misal: Bank BCA"
+                      : "Misal: DANA / GoPay"
+                  }
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  {chType === "M-Banking"
+                    ? "Nomor Rekening"
+                    : "Nomor HP / Akun E-Wallet"}
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={chAccountNumber}
+                  onChange={(e) => setChAccountNumber(e.target.value)}
+                  placeholder="Masukkan nomor rekening / nomor tujuan..."
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 font-mono font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Atas Nama Pemilik Rekening (Opsional)
+                </label>
+                <input
+                  type="text"
+                  value={chAccountHolder}
+                  onChange={(e) => setChAccountHolder(e.target.value)}
+                  placeholder="Contoh: PT / Nama Pemilik Toko"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200"
+                />
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowChannelModal(false)}
+                  className="flex-1 py-2.5 rounded-xl border border-slate-200 font-bold text-slate-600"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-bold"
+                >
+                  Simpan Metode
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
   // ============================================================================
-  // MODE 1: MANAJEMEN KARYAWAN & RBAC
+  // MODE: METODE PEMBAYARAN (KHUSUS OWNER)
+  // ============================================================================
+  if (mode === "payment-methods") {
+    return (
+      <div className="space-y-6">
+        <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-card space-y-6">
+          <div>
+            <h1 className="text-xl sm:text-2xl font-extrabold text-navy-800">
+              Pengaturan Metode Pembayaran Toko
+            </h1>
+            <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
+              Atur metode pembayaran yang tersedia di Kasir (Tunai, Upload QRIS, serta daftar Rekening Bank M-Banking / E-Wallet).
+            </p>
+          </div>
+
+          {renderPaymentMethodsEditor()}
+        </div>
+      </div>
+    );
+  }
+
+  // ============================================================================
+  // MODE: KARYAWAN / DAFTAR AKUN (Owner TIDAK BISA menambah kasir - Read Only!)
   // ============================================================================
   if (mode === "employees") {
     return (
       <div className="space-y-6">
         <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-card space-y-5">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <h1 className="text-xl sm:text-2xl font-extrabold text-navy-800">
-                Manajemen Karyawan
-              </h1>
-              <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
-                Kelola akun karyawan dan atur hak akses. Kuota Kasir Aktif:{" "}
-                <b className="text-emerald-600">
-                  {currentCashierCount} / {maxAllowedCashiers} Akun
-                </b>{" "}
-                ({activePlanObj.name}).
-              </p>
-            </div>
-
-            <button
-              onClick={() => {
-                setEmpError(null);
-                setShowEmpModal(true);
-              }}
-              className="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs sm:text-sm font-bold shadow-sm flex items-center gap-1.5"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Tambah Karyawan</span>
-            </button>
+          <div>
+            <h1 className="text-xl sm:text-2xl font-extrabold text-navy-800">
+              Daftar Akun Owner & Kasir
+            </h1>
+            <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
+              Lihat daftar akun yang aktif pada toko Anda beserta sisa masa aktif akun.
+            </p>
           </div>
 
-          {employees.length === 0 ? (
+          <div className="p-4 rounded-2xl bg-sky-50 border border-sky-200/80 flex items-start gap-3 text-xs sm:text-sm text-navy-800">
+            <Info className="w-5 h-5 text-sky-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-bold">
+                Pembuatan akun Kasir & Owner dikelola oleh Super Admin
+              </p>
+              <p className="text-xs text-slate-600 mt-0.5">
+                Owner tidak dapat menambah atau menghapus akun Kasir secara langsung. Hubungi Super Admin untuk penambahan akun baru atau perpanjangan masa aktif.
+              </p>
+            </div>
+          </div>
+
+          {accounts.length === 0 ? (
             <div className="py-10 text-center text-xs text-slate-400 border border-dashed border-slate-200 rounded-2xl">
-              Belum ada akun karyawan/kasir terdaftar. Klik tombol{" "}
-              <b>+ Tambah Karyawan</b> untuk menambahkan kasir.
+              Belum ada akun Owner atau Kasir yang dibuat oleh Super Admin.
             </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase">
-                    <th className="py-3.5 px-4">Nama</th>
+                    <th className="py-3.5 px-4">Nama & Username</th>
                     <th className="py-3.5 px-4">Role</th>
                     <th className="py-3.5 px-4">Status</th>
-                    <th className="py-3.5 px-4">Terakhir Login</th>
-                    <th className="py-3.5 px-4 text-right">Aksi</th>
+                    <th className="py-3.5 px-4">Sisa Waktu Aktif</th>
+                    <th className="py-3.5 px-4">Berlaku Hingga</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-sm">
-                  {employees.map((emp) => (
-                    <tr key={emp.id} className="hover:bg-slate-50/80">
-                      <td className="py-3.5 px-4">
-                        <div className="flex items-center gap-3">
-                          <div
-                            style={{ backgroundColor: emp.avatarColor }}
-                            className="w-9 h-9 rounded-full text-white font-extrabold text-xs flex items-center justify-center shrink-0 shadow-xs"
-                          >
-                            {emp.name
-                              .split(" ")
-                              .map((n) => n[0])
-                              .join("")
-                              .slice(0, 2)}
-                          </div>
-                          <div>
-                            <p className="font-bold text-navy-800">
-                              {emp.name}
-                            </p>
-                            <p className="text-xs text-slate-400">
-                              {emp.email}
-                            </p>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="py-3.5 px-4 font-semibold text-slate-700">
-                        {emp.role}
-                      </td>
-                      <td className="py-3.5 px-4">
-                        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200/60">
-                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
-                          {emp.status}
-                        </span>
-                      </td>
-                      <td className="py-3.5 px-4 text-slate-600 text-xs sm:text-sm">
-                        {emp.lastLogin}
-                      </td>
-                      <td className="py-3.5 px-4 text-right">
-                        <div className="inline-flex items-center gap-1">
-                          <button
-                            onClick={() => setShowEmpModal(true)}
-                            title="Edit Izin Karyawan"
-                            className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-navy-800"
-                          >
-                            <Edit3 className="w-4 h-4" />
-                          </button>
-                          {emp.role !== "Owner" && (
-                            <button
-                              onClick={() => onRemoveEmployee(emp.id)}
-                              title="Hapus Kasir"
-                              className="p-2 rounded-lg text-rose-500 hover:bg-rose-50"
+                  {accounts.map((acc) => {
+                    const timeInfo = getRemainingTimeInfo(acc.expiresAt);
+                    return (
+                      <tr key={acc.id} className="hover:bg-slate-50/80">
+                        <td className="py-3.5 px-4">
+                          <div className="flex items-center gap-3">
+                            <div
+                              style={{ backgroundColor: acc.avatarColor }}
+                              className="w-9 h-9 rounded-full text-white font-extrabold text-xs flex items-center justify-center shrink-0"
                             >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                              {acc.name
+                                .split(" ")
+                                .map((n) => n[0])
+                                .join("")
+                                .slice(0, 2)
+                                .toUpperCase()}
+                            </div>
+                            <div>
+                              <p className="font-bold text-navy-800">
+                                {acc.name}
+                              </p>
+                              <p className="text-xs text-slate-400 font-mono">
+                                @{acc.username}
+                              </p>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="py-3.5 px-4 font-bold text-slate-700">
+                          {acc.role === "OWNER" ? "Owner" : "Kasir"}
+                        </td>
+                        <td className="py-3.5 px-4">
+                          <span
+                            className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold ${
+                              acc.status === "AKTIF" && !timeInfo.isExpired
+                                ? "bg-emerald-50 text-emerald-700"
+                                : "bg-rose-50 text-rose-700"
+                            }`}
+                          >
+                            {acc.status === "AKTIF" && !timeInfo.isExpired
+                              ? "Aktif"
+                              : "Nonaktif / Habis"}
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-4">
+                          <span
+                            className={`text-xs font-bold ${
+                              timeInfo.isExpired
+                                ? "text-rose-600"
+                                : timeInfo.isExpiringSoon
+                                ? "text-amber-600"
+                                : "text-emerald-600"
+                            }`}
+                          >
+                            {timeInfo.label}
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-4 text-xs text-slate-600">
+                          {formatDateOnly(acc.expiresAt)}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -266,6 +723,30 @@ export function SaasSettingsAdminView({
               <tbody className="divide-y divide-slate-100">
                 <tr>
                   <td className="py-2.5 px-3 font-semibold">
+                    Buat Akun Owner & Kasir + Masa Aktif
+                  </td>
+                  <td className="py-2.5 px-3 text-emerald-600 font-bold">
+                    Ya (Penuh)
+                  </td>
+                  <td className="py-2.5 px-3 text-rose-500 font-semibold">
+                    Tidak
+                  </td>
+                  <td className="py-2.5 px-3 text-rose-500 font-semibold">
+                    Tidak
+                  </td>
+                </tr>
+                <tr>
+                  <td className="py-2.5 px-3 font-semibold">
+                    Edit Metode Pembayaran (QRIS, M-Banking, E-Wallet)
+                  </td>
+                  <td className="py-2.5 px-3 text-slate-500">Administratif</td>
+                  <td className="py-2.5 px-3 text-emerald-600 font-bold">
+                    Ya (Penuh)
+                  </td>
+                  <td className="py-2.5 px-3 text-slate-500">Pakai di POS</td>
+                </tr>
+                <tr>
+                  <td className="py-2.5 px-3 font-semibold">
                     Transaksi POS & Cetak Struk
                   </td>
                   <td className="py-2.5 px-3 text-slate-400">Tidak</td>
@@ -278,16 +759,6 @@ export function SaasSettingsAdminView({
                 </tr>
                 <tr>
                   <td className="py-2.5 px-3 font-semibold">
-                    Manajemen Produk, HPP & Stok Opname
-                  </td>
-                  <td className="py-2.5 px-3 text-slate-500">Administratif</td>
-                  <td className="py-2.5 px-3 text-emerald-600 font-bold">
-                    Kelola Penuh
-                  </td>
-                  <td className="py-2.5 px-3 text-slate-500">Lihat Saja</td>
-                </tr>
-                <tr>
-                  <td className="py-2.5 px-3 font-semibold">
                     Laporan Laba Bersih & HPP
                   </td>
                   <td className="py-2.5 px-3 text-slate-400">Tidak Otomatis</td>
@@ -296,352 +767,16 @@ export function SaasSettingsAdminView({
                     Dibatasi
                   </td>
                 </tr>
-                <tr>
-                  <td className="py-2.5 px-3 font-semibold">
-                    Langganan SaaS & Manajemen Kasir
-                  </td>
-                  <td className="py-2.5 px-3 text-emerald-600 font-bold">
-                    Platform Global
-                  </td>
-                  <td className="py-2.5 px-3 text-emerald-600 font-bold">
-                    Bisnis Sendiri
-                  </td>
-                  <td className="py-2.5 px-3 text-rose-500 font-semibold">
-                    Tidak
-                  </td>
-                </tr>
               </tbody>
             </table>
           </div>
         </div>
-
-        {/* MODAL UNDANG KASIR */}
-        {showEmpModal && (
-          <div className="fixed inset-0 z-50 bg-navy-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
-              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                <h3 className="text-lg font-extrabold text-navy-800">
-                  Undang / Tambah Akun Kasir
-                </h3>
-                <button
-                  onClick={() => setShowEmpModal(false)}
-                  className="p-1 rounded-lg text-slate-400 hover:text-slate-600"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-              <form onSubmit={handleInviteCashier} className="space-y-3.5 text-sm">
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">
-                    Nama Lengkap Kasir
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={empName}
-                    onChange={(e) => setEmpName(e.target.value)}
-                    placeholder="Masukkan nama kasir..."
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200"
-                  />
-                </div>
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">
-                    Username Login
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={empUsername}
-                    onChange={(e) => setEmpUsername(e.target.value)}
-                    placeholder="kasir01"
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200"
-                  />
-                </div>
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">
-                    Email Undangan
-                  </label>
-                  <input
-                    type="email"
-                    required
-                    value={empEmail}
-                    onChange={(e) => setEmpEmail(e.target.value)}
-                    placeholder="kasir@tokoanda.id"
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200"
-                  />
-                </div>
-                {empError && (
-                  <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs font-bold text-rose-600">
-                    {empError}
-                  </div>
-                )}
-                <div className="flex gap-3 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowEmpModal(false)}
-                    className="flex-1 py-2.5 rounded-xl border border-slate-200 font-bold text-slate-600"
-                  >
-                    Batal
-                  </button>
-                  <button
-                    type="submit"
-                    className="flex-1 py-2.5 rounded-xl bg-emerald-500 text-white font-bold"
-                  >
-                    Kirim Undangan & Aktifkan
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
-        )}
       </div>
     );
   }
 
   // ============================================================================
-  // MODE 2: LANGGANAN & PEMBAYARAN SAAS
-  // ============================================================================
-  if (mode === "subscription") {
-    return (
-      <div className="space-y-6">
-        <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-card space-y-6">
-          <div>
-            <h1 className="text-xl sm:text-2xl font-extrabold text-navy-800">
-              Langganan & Pembayaran
-            </h1>
-            <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
-              Kelola paket aktif bisnis Anda, kuota kasir, add-on, dan riwayat pembayaran invoice.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            <div className="lg:col-span-7 space-y-5">
-              <div className="p-6 rounded-2xl bg-gradient-to-br from-emerald-50/70 via-white to-teal-50/50 border border-emerald-200/80 shadow-xs space-y-5">
-                <div className="flex items-start gap-4">
-                  <div className="w-16 h-16 rounded-2xl bg-navy-800 flex items-center justify-center text-amber-400 shadow-md shrink-0">
-                    <Crown className="w-8 h-8 fill-amber-400" />
-                  </div>
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <h2 className="text-xl font-extrabold text-navy-800">
-                        {activePlanObj.name}
-                      </h2>
-                      <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-500 text-white">
-                        Aktif
-                      </span>
-                    </div>
-                    <p className="text-lg font-extrabold text-navy-800">
-                      {formatIDR(
-                        billingCycle === "MONTHLY"
-                          ? activePlanObj.monthlyPrice
-                          : activePlanObj.yearlyPrice
-                      )}{" "}
-                      <span className="text-sm font-medium text-slate-500">
-                        / {billingCycle === "MONTHLY" ? "bulan" : "tahun"}
-                      </span>
-                    </p>
-                  </div>
-                </div>
-
-                <div className="pt-4 border-t border-slate-200/70 space-y-3">
-                  <h3 className="text-xs sm:text-sm font-extrabold text-navy-800">
-                    Fitur yang Anda dapatkan:
-                  </h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    {activePlanObj.features.map((feat, idx) => (
-                      <div
-                        key={idx}
-                        className="flex items-center gap-2 text-xs sm:text-sm text-slate-700 font-medium"
-                      >
-                        <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-                        <span>{feat}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="lg:col-span-5 space-y-3">
-              <div className="flex items-center justify-between">
-                <h3 className="text-base font-extrabold text-navy-800">
-                  Riwayat Pembayaran
-                </h3>
-                <span className="text-xs font-bold text-emerald-600 flex items-center gap-1">
-                  <span>Invoice</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </span>
-              </div>
-
-              {subscriptionPayments.length === 0 ? (
-                <div className="p-8 rounded-2xl border border-dashed border-slate-200 text-center text-xs text-slate-400">
-                  Belum ada riwayat pembayaran tagihan.
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {subscriptionPayments.map((pay) => (
-                    <div
-                      key={pay.id}
-                      className="p-4 rounded-2xl border border-slate-200/80 bg-white flex items-center justify-between gap-3"
-                    >
-                      <div className="flex items-start gap-3">
-                        <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0 mt-0.5">
-                          <CreditCard className="w-4 h-4" />
-                        </div>
-                        <div>
-                          <p className="text-sm font-extrabold text-navy-800">
-                            {pay.date}
-                          </p>
-                          <p className="text-xs font-semibold text-slate-600">
-                            {formatIDR(pay.amount)} - {pay.status}
-                          </p>
-                          <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-600 mt-1">
-                            <CheckCircle2 className="w-3.5 h-3.5" />
-                            Pembayaran Berhasil ({pay.invoiceNumber})
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* All Plans Comparison */}
-          <div className="pt-4 border-t border-slate-100 space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <h3 className="text-base font-extrabold text-navy-800">
-                Pilihan Paket Harga SaaS KELOKRA
-              </h3>
-              <div className="inline-flex rounded-xl bg-slate-100 p-1 text-xs font-bold">
-                <button
-                  onClick={() => onChangePlan(currentPlan, "MONTHLY")}
-                  className={`px-3 py-1.5 rounded-lg transition ${
-                    billingCycle === "MONTHLY"
-                      ? "bg-white text-navy-800 shadow-xs"
-                      : "text-slate-500"
-                  }`}
-                >
-                  Bulanan
-                </button>
-                <button
-                  onClick={() => onChangePlan(currentPlan, "YEARLY")}
-                  className={`px-3 py-1.5 rounded-lg transition ${
-                    billingCycle === "YEARLY"
-                      ? "bg-white text-navy-800 shadow-xs"
-                      : "text-slate-500"
-                  }`}
-                >
-                  Tahunan (Hemat 2 Bulan)
-                </button>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-              {SUBSCRIPTION_PLANS.map((plan) => {
-                const isCurrent = plan.code === currentPlan;
-                const price =
-                  billingCycle === "MONTHLY"
-                    ? plan.monthlyPrice
-                    : plan.yearlyPrice;
-                return (
-                  <div
-                    key={plan.code}
-                    className={`rounded-2xl border p-5 flex flex-col justify-between relative ${
-                      isCurrent
-                        ? "border-emerald-500 bg-emerald-50/30 ring-2 ring-emerald-500/20"
-                        : "border-slate-200/80 bg-white"
-                    }`}
-                  >
-                    {plan.badge && (
-                      <span className="absolute -top-2.5 right-4 px-2.5 py-0.5 rounded-full bg-emerald-500 text-white text-[10px] font-extrabold uppercase">
-                        {plan.badge}
-                      </span>
-                    )}
-                    <div className="space-y-3">
-                      <h4 className="text-base font-extrabold text-navy-800">
-                        {plan.name}
-                      </h4>
-                      <p className="text-2xl font-extrabold text-navy-800">
-                        {formatIDR(price)}
-                        <span className="text-xs font-normal text-slate-500">
-                          /{billingCycle === "MONTHLY" ? "bln" : "thn"}
-                        </span>
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        {plan.description}
-                      </p>
-                      <ul className="space-y-1.5 pt-2 text-xs text-slate-700">
-                        {plan.features.map((f, i) => (
-                          <li key={i} className="flex items-center gap-1.5">
-                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                            <span>{f}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-
-                    <button
-                      onClick={() => onChangePlan(plan.code, billingCycle)}
-                      disabled={isCurrent}
-                      className={`mt-5 w-full py-2.5 rounded-xl text-xs font-extrabold transition ${
-                        isCurrent
-                          ? "bg-slate-200 text-slate-600 cursor-default"
-                          : "bg-navy-800 hover:bg-emerald-600 text-white"
-                      }`}
-                    >
-                      {isCurrent ? "Paket Aktif Saat Ini" : "Pilih Paket Ini"}
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Add-ons Catalog */}
-          <div className="pt-4 border-t border-slate-100 space-y-3">
-            <h3 className="text-base font-extrabold text-navy-800">
-              Add-on Tambahan yang Dapat Diaktifkan
-            </h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {addons.map((addon) => (
-                <div
-                  key={addon.id}
-                  className="p-4 rounded-2xl border border-slate-200/80 flex items-center justify-between gap-4"
-                >
-                  <div>
-                    <p className="text-sm font-extrabold text-navy-800">
-                      {addon.name}{" "}
-                      <span className="text-emerald-600">
-                        (+{formatIDR(addon.priceMonthly)}/bln)
-                      </span>
-                    </p>
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      {addon.description}
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => onToggleAddon(addon.id)}
-                    className={`px-3.5 py-2 rounded-xl text-xs font-bold shrink-0 transition ${
-                      addon.active
-                        ? "bg-emerald-500 text-white"
-                        : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                    }`}
-                  >
-                    {addon.active ? "Aktif" : "Aktifkan"}
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // ============================================================================
-  // MODE 3: PENGATURAN SISTEM
+  // MODE: PENGATURAN SISTEM
   // ============================================================================
   if (mode === "settings") {
     return (
@@ -651,7 +786,7 @@ export function SaasSettingsAdminView({
             Pengaturan Sistem
           </h1>
           <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
-            Atur preferensi sistem sesuai kebutuhan bisnis Anda
+            Atur preferensi sistem, toko, dan metode pembayaran sesuai kebutuhan bisnis Anda
           </p>
         </div>
 
@@ -853,8 +988,11 @@ export function SaasSettingsAdminView({
             {settingsTab === "Pembayaran" && (
               <div className="space-y-4">
                 <h2 className="text-base font-extrabold text-navy-800">
-                  Konfigurasi Pajak & Metode Pembayaran
+                  Metode Pembayaran & Pajak Toko
                 </h2>
+
+                {renderPaymentMethodsEditor()}
+
                 <div className="p-5 rounded-2xl border border-slate-200/80 flex items-center justify-between">
                   <div>
                     <h3 className="text-sm font-extrabold text-navy-800">
@@ -980,7 +1118,7 @@ export function SaasSettingsAdminView({
                   Backup & Pemulihan Data
                 </h2>
                 <p className="text-xs text-slate-500">
-                  Unduh seluruh data produk, stok, transaksi, dan pengaturan dalam format JSON, atau hapus/bersihkan seluruh data lokal.
+                  Unduh seluruh data produk, stok, transaksi, dan pengaturan dalam format JSON, atau kosongkan seluruh data lokal.
                 </p>
                 <div className="flex flex-wrap gap-3">
                   <button
@@ -991,7 +1129,7 @@ export function SaasSettingsAdminView({
                     <span>Unduh Backup Data (.JSON)</span>
                   </button>
                   <button
-                    onClick={onResetDemoData}
+                    onClick={onResetAllData}
                     className="px-4 py-2.5 rounded-xl border border-rose-200 text-rose-600 hover:bg-rose-50 text-xs font-bold flex items-center gap-2"
                   >
                     <RotateCcw className="w-4 h-4" />
@@ -1010,7 +1148,7 @@ export function SaasSettingsAdminView({
                   • Peringatan otomatis saat stok produk menyentuh batas minimum.
                 </p>
                 <p>
-                  • Pengingat H-3 sebelum masa langganan bulanan/tahunan berakhir.
+                  • Peringatan jika sisa masa aktif akun Owner/Kasir kurang dari 7 hari.
                 </p>
               </div>
             )}
@@ -1021,7 +1159,7 @@ export function SaasSettingsAdminView({
   }
 
   // ============================================================================
-  // MODE 4: BANTUAN & TIKET SUPPORT
+  // MODE: BANTUAN
   // ============================================================================
   if (mode === "help") {
     return (
@@ -1032,10 +1170,10 @@ export function SaasSettingsAdminView({
           </div>
           <div>
             <h1 className="text-xl font-extrabold text-navy-800">
-              Pusat Bantuan & Dukungan Pelanggan KELOKRA
+              Pusat Bantuan KELOKRA
             </h1>
             <p className="text-xs text-slate-500">
-              Panduan cepat operasional kasir, printer thermal, dan langganan SaaS
+              Panduan cepat manajemen akun Super Admin, metode pembayaran Owner, dan kasir POS
             </p>
           </div>
         </div>
@@ -1043,27 +1181,26 @@ export function SaasSettingsAdminView({
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs sm:text-sm">
           <div className="p-5 rounded-2xl border border-slate-200/80 space-y-2">
             <h3 className="font-extrabold text-navy-800">
-              1. Cara Cetak Struk Thermal 58/80mm
+              1. Membuat Akun Owner & Kasir (Super Admin)
             </h3>
             <p className="text-slate-600 text-xs leading-relaxed">
-              Hubungkan printer thermal via Bluetooth/USB, lalu setelah transaksi selesai klik tombol{" "}
-              <b>Cetak Struk</b>. Ukuran kertas dapat diatur di menu Pengaturan → Integrasi.
+              Buka menu <b>Super Admin</b> untuk membuat akun <b>Owner</b> atau <b>Kasir</b> beserta durasi aktifnya (berapa bulan atau 1 tahun), lengkap dengan hitungan sisa waktu.
             </p>
           </div>
           <div className="p-5 rounded-2xl border border-slate-200/80 space-y-2">
             <h3 className="font-extrabold text-navy-800">
-              2. Bagaimana Mode Offline Bekerja?
+              2. Mengatur QRIS & Rekening Bank (Owner)
             </h3>
             <p className="text-slate-600 text-xs leading-relaxed">
-              Saat internet terputus, transaksi <b>Tunai</b> tetap berjalan lancar dan disimpan di antrean lokal. Ketika online kembali, klik tombol <b>Sync</b> di bagian kiri bawah.
+              Buka menu <b>Metode Pembayaran</b> di role Owner untuk mengaktifkan QRIS, mengupload gambar QRIS toko, serta menambahkan nomor rekening bank (M-Banking) atau E-Wallet.
             </p>
           </div>
           <div className="p-5 rounded-2xl border border-slate-200/80 space-y-2">
             <h3 className="font-extrabold text-navy-800">
-              3. Perhitungan HPP & Laba Bersih
+              3. Cetak Struk & Mode Offline PWA
             </h3>
             <p className="text-slate-600 text-xs leading-relaxed">
-              KELOKRA menyimpan snapshot HPP pada saat transaksi terjadi, sehingga perubahan harga beli di masa depan tidak merusak laporan laba historis Anda.
+              Transaksi Tunai dapat tetap berjalan saat internet putus dan disinkronkan saat online kembali. Struk mendukung printer thermal 58/80mm dan WhatsApp.
             </p>
           </div>
         </div>
@@ -1072,168 +1209,615 @@ export function SaasSettingsAdminView({
   }
 
   // ============================================================================
-  // MODE 5: SUPER ADMIN PLATFORM VIEW
+  // MODE: SUPER ADMIN — BUAT AKUN OWNER & KASIR + DURASI MASA AKTIF (SISA WAKTU)
   // ============================================================================
-  const totalMrr = platformTenants.reduce(
-    (s, t) => s + t.mrrContribution,
-    0
-  );
-  const paidTenants = platformTenants.filter((t) => t.mrrContribution > 0);
-  const arpu =
-    paidTenants.length > 0 ? Math.round(totalMrr / paidTenants.length) : 0;
+  const ownerAccountsCount = accounts.filter((a) => a.role === "OWNER").length;
+  const cashierAccountsCount = accounts.filter(
+    (a) => a.role === "CASHIER"
+  ).length;
+  const activeAccountsCount = accounts.filter(
+    (a) => a.status === "AKTIF" && !getRemainingTimeInfo(a.expiresAt).isExpired
+  ).length;
+  const expiringSoonCount = accounts.filter((a) => {
+    const t = getRemainingTimeInfo(a.expiresAt);
+    return !t.isExpired && t.isExpiringSoon;
+  }).length;
+
+  const handleCreateAccountSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setAccError(null);
+
+    if (!accName.trim() || !accUsername.trim() || !accPassword.trim()) {
+      setAccError("Nama, Username, dan Password wajib diisi.");
+      return;
+    }
+
+    const duplicate = accounts.find(
+      (a) => a.username.toLowerCase() === accUsername.trim().toLowerCase()
+    );
+    if (duplicate) {
+      setAccError(`Username "${accUsername}" sudah terdaftar.`);
+      return;
+    }
+
+    const nowIso = new Date().toISOString();
+    const months = Math.max(1, Number(accDurationMonths) || 1);
+    const expiresIso = addMonthsToIso(nowIso, months);
+
+    const newAcc: ManagedAccount = {
+      id: generateId("acc"),
+      name: accName.trim(),
+      username: accUsername.trim().toLowerCase(),
+      password: accPassword,
+      email: accEmail.trim() || "-",
+      role: accRole,
+      storeName: accStoreName.trim() || storeSettings.storeName,
+      durationMonths: months,
+      createdAt: nowIso,
+      expiresAt: expiresIso,
+      status: "AKTIF",
+      avatarColor: accRole === "OWNER" ? "#10B981" : "#0EA5E9",
+      lastLogin: "Belum pernah login",
+    };
+
+    onCreateAccount(newAcc);
+    setAccName("");
+    setAccUsername("");
+    setAccPassword("");
+    setAccEmail("");
+    setAccDurationMonths(12);
+    setShowAccountModal(false);
+  };
 
   return (
     <div className="space-y-6">
+      {/* Super Admin Top Banner */}
       <div className="bg-navy-800 text-white rounded-2xl p-6 shadow-md flex flex-wrap items-center justify-between gap-4">
         <div className="space-y-1">
           <span className="px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-emerald-500 text-white uppercase">
-            Super Admin Platform Control
+            Super Admin KELOKRA
           </span>
           <h1 className="text-xl sm:text-2xl font-extrabold">
-            Dashboard SaaS Multi-Tenant KELOKRA
+            Manajemen Akun Owner & Kasir + Masa Aktif
           </h1>
           <p className="text-xs sm:text-sm text-slate-300">
-            Pantau seluruh tenant bisnis, Monthly Recurring Revenue (MRR), ARPU, dan kesehatan platform.
+            Buat akun untuk role <b>Owner</b> dan <b>Kasir</b>, tentukan durasi berapa bulan atau 1 tahun, dan pantau sisa waktu aktifnya.
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          <div className="px-4 py-2.5 rounded-xl bg-white/10 border border-white/15 text-right">
-            <p className="text-[11px] text-slate-300">
-              Total MRR Aktif ({platformTenants.length} Tenant)
-            </p>
-            <p className="text-lg font-extrabold text-emerald-400">
-              {formatIDR(totalMrr)} / bln
-            </p>
-          </div>
-        </div>
+
+        <button
+          onClick={() => {
+            setAccError(null);
+            setAccStoreName(storeSettings.storeName);
+            setShowAccountModal(true);
+          }}
+          className="px-5 py-3 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs sm:text-sm font-extrabold shadow-md flex items-center gap-2 transition"
+        >
+          <UserPlus className="w-4 h-4" />
+          <span>+ Buat Akun (Owner / Kasir)</span>
+        </button>
       </div>
 
+      {/* 4 Summary Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-card">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-bold text-slate-500">
-              MRR Kotor Platform
+              Total Akun Dibuat
             </span>
-            <TrendingUp className="w-4 h-4 text-emerald-600" />
+            <Users className="w-4 h-4 text-emerald-600" />
           </div>
           <p className="text-2xl font-extrabold text-navy-800">
-            {formatIDR(totalMrr)}
+            {accounts.length} Akun
           </p>
           <p className="text-[11px] text-slate-500 mt-1">
-            Dari {platformTenants.length} bisnis terdaftar
+            {ownerAccountsCount} Owner • {cashierAccountsCount} Kasir
           </p>
         </div>
 
         <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-card">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-bold text-slate-500">
-              ARPU (Rata-rata / Bisnis)
-            </span>
-            <Users className="w-4 h-4 text-sky-600" />
-          </div>
-          <p className="text-2xl font-extrabold text-navy-800">
-            {formatIDR(arpu)}
-          </p>
-          <p className="text-[11px] text-emerald-600 font-semibold mt-1">
-            {paidTenants.length} pelanggan paket berbayar
-          </p>
-        </div>
-
-        <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-card">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-bold text-slate-500">
-              Tenant Masa Trial
+              Akun Masih Aktif
             </span>
             <CheckCircle2 className="w-4 h-4 text-emerald-600" />
           </div>
-          <p className="text-2xl font-extrabold text-navy-800">
-            {platformTenants.filter((t) => t.status === "TRIALING").length}
+          <p className="text-2xl font-extrabold text-emerald-600">
+            {activeAccountsCount} Aktif
           </p>
-          <p className="text-[11px] text-slate-500 mt-1">Trial 14 Hari</p>
+          <p className="text-[11px] text-slate-500 mt-1">
+            Masa aktif masih berlaku
+          </p>
         </div>
 
         <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-card">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-bold text-slate-500">
-              Status Infrastruktur
+              Segera Berakhir (≤ 7 Hari)
+            </span>
+            <Clock className="w-4 h-4 text-amber-600" />
+          </div>
+          <p className="text-2xl font-extrabold text-amber-600">
+            {expiringSoonCount} Akun
+          </p>
+          <p className="text-[11px] text-slate-500 mt-1">
+            Perlu perpanjangan waktu
+          </p>
+        </div>
+
+        <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-card">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-bold text-slate-500">
+              Isolasi & Keamanan
             </span>
             <ShieldCheck className="w-4 h-4 text-emerald-600" />
           </div>
-          <p className="text-2xl font-extrabold text-emerald-600">Online</p>
+          <p className="text-2xl font-extrabold text-navy-800">Siap</p>
           <p className="text-[11px] text-slate-500 mt-1">
-            Siap Deploy di Vercel
+            Kontrol penuh oleh Super Admin
           </p>
         </div>
       </div>
 
+      {/* Accounts Table */}
       <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-card space-y-4">
-        <h2 className="text-base sm:text-lg font-extrabold text-navy-800">
-          Daftar Tenant Bisnis Terdaftar di Platform KELOKRA
-        </h2>
-        {platformTenants.length === 0 ? (
-          <div className="py-10 text-center text-xs text-slate-400 border border-dashed border-slate-200 rounded-2xl">
-            Belum ada tenant bisnis yang terdaftar. Gunakan tombol <b>Ganti Role / Trial → Daftar Bisnis Baru</b> di bagian atas untuk mendaftarkan tenant baru.
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-base sm:text-lg font-extrabold text-navy-800">
+              Daftar Akun Owner & Kasir KELOKRA
+            </h2>
+            <p className="text-xs text-slate-500">
+              Memantau durasi langganan akun (bulan/tahun) dan keterangan tinggal berapa lama lagi waktunya.
+            </p>
+          </div>
+          <button
+            onClick={() => setShowAccountModal(true)}
+            className="px-4 py-2 rounded-xl bg-emerald-50 text-emerald-700 hover:bg-emerald-100 text-xs font-bold flex items-center gap-1.5"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Tambah Akun Baru</span>
+          </button>
+        </div>
+
+        {accounts.length === 0 ? (
+          <div className="py-12 text-center space-y-3 border border-dashed border-slate-200 rounded-2xl">
+            <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto">
+              <UserPlus className="w-6 h-6" />
+            </div>
+            <p className="text-sm font-bold text-navy-800">
+              Belum ada akun Owner maupun Kasir yang dibuat
+            </p>
+            <p className="text-xs text-slate-500 max-w-md mx-auto">
+              Klik tombol <b>+ Buat Akun (Owner / Kasir)</b> untuk membuat akun baru lengkap dengan durasi masa aktif (1 bulan, beberapa bulan, atau 1 tahun).
+            </p>
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-sm">
               <thead>
                 <tr className="border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase">
-                  <th className="py-3 px-3">Nama Bisnis / Tenant</th>
-                  <th className="py-3 px-3">Owner</th>
-                  <th className="py-3 px-3">Jenis Usaha</th>
-                  <th className="py-3 px-3">Paket</th>
-                  <th className="py-3 px-3">Kuota Kasir</th>
-                  <th className="py-3 px-3">Kontribusi MRR</th>
+                  <th className="py-3 px-3">Nama & Toko</th>
+                  <th className="py-3 px-3">Role</th>
+                  <th className="py-3 px-3">Username & Password</th>
+                  <th className="py-3 px-3">Durasi Dipilih</th>
+                  <th className="py-3 px-3">Sisa Waktu (Countdown)</th>
                   <th className="py-3 px-3">Status</th>
+                  <th className="py-3 px-3 text-right">Aksi</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {platformTenants.map((t) => (
-                  <tr key={t.id} className="hover:bg-slate-50/80">
-                    <td className="py-3 px-3 font-bold text-navy-800">
-                      {t.businessName}
-                    </td>
-                    <td className="py-3 px-3">
-                      <div className="font-semibold text-slate-700">
-                        {t.ownerName}
-                      </div>
-                      <div className="text-xs text-slate-400">
-                        {t.ownerEmail}
-                      </div>
-                    </td>
-                    <td className="py-3 px-3 text-xs text-slate-600">
-                      {t.businessType}
-                    </td>
-                    <td className="py-3 px-3">
-                      <span className="px-2.5 py-1 rounded-lg text-xs font-extrabold bg-navy-800 text-white">
-                        {t.plan}
-                      </span>
-                    </td>
-                    <td className="py-3 px-3 text-xs font-semibold">
-                      {t.cashierCount} / {t.maxCashiers} Kasir
-                    </td>
-                    <td className="py-3 px-3 font-bold text-emerald-600">
-                      {formatIDR(t.mrrContribution)}
-                    </td>
-                    <td className="py-3 px-3">
-                      <span
-                        className={`px-2.5 py-1 rounded-full text-xs font-bold ${
-                          t.status === "ACTIVE"
-                            ? "bg-emerald-50 text-emerald-700"
-                            : "bg-amber-100 text-amber-800"
-                        }`}
-                      >
-                        {t.status} ({t.periodEnd})
-                      </span>
-                    </td>
-                  </tr>
-                ))}
+                {accounts.map((acc) => {
+                  const timeInfo = getRemainingTimeInfo(acc.expiresAt);
+                  const showPwd = !!visiblePasswords[acc.id];
+                  return (
+                    <tr key={acc.id} className="hover:bg-slate-50/80">
+                      <td className="py-3.5 px-3">
+                        <p className="font-extrabold text-navy-800">
+                          {acc.name}
+                        </p>
+                        <p className="text-xs text-slate-500">{acc.storeName}</p>
+                      </td>
+                      <td className="py-3.5 px-3">
+                        <span
+                          className={`px-2.5 py-1 rounded-lg text-xs font-extrabold ${
+                            acc.role === "OWNER"
+                              ? "bg-emerald-500 text-white"
+                              : "bg-sky-500 text-white"
+                          }`}
+                        >
+                          {acc.role === "OWNER" ? "Owner" : "Kasir"}
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-3 text-xs">
+                        <p className="font-mono font-bold text-navy-800">
+                          @{acc.username}
+                        </p>
+                        <div className="flex items-center gap-1.5 text-slate-500 mt-0.5">
+                          <span className="font-mono">
+                            {showPwd ? acc.password : "••••••••"}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setVisiblePasswords((prev) => ({
+                                ...prev,
+                                [acc.id]: !prev[acc.id],
+                              }))
+                            }
+                            className="text-slate-400 hover:text-navy-800"
+                          >
+                            {showPwd ? (
+                              <EyeOff className="w-3.5 h-3.5" />
+                            ) : (
+                              <Eye className="w-3.5 h-3.5" />
+                            )}
+                          </button>
+                        </div>
+                      </td>
+                      <td className="py-3.5 px-3 text-xs">
+                        <p className="font-bold text-navy-800">
+                          {acc.durationMonths === 12
+                            ? "1 Tahun (12 Bulan)"
+                            : `${acc.durationMonths} Bulan`}
+                        </p>
+                        <p className="text-[11px] text-slate-400">
+                          s/d {formatDateOnly(acc.expiresAt)}
+                        </p>
+                      </td>
+                      <td className="py-3.5 px-3">
+                        <span
+                          className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-extrabold ${
+                            timeInfo.isExpired
+                              ? "bg-rose-100 text-rose-700"
+                              : timeInfo.isExpiringSoon
+                              ? "bg-amber-100 text-amber-800"
+                              : "bg-emerald-50 text-emerald-700"
+                          }`}
+                        >
+                          <Clock className="w-3.5 h-3.5" />
+                          <span>{timeInfo.label}</span>
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-3">
+                        <button
+                          type="button"
+                          onClick={() => onToggleAccountStatus(acc.id)}
+                          className={`px-2.5 py-1 rounded-full text-xs font-bold ${
+                            acc.status === "AKTIF" && !timeInfo.isExpired
+                              ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                              : "bg-slate-200 text-slate-600"
+                          }`}
+                        >
+                          {acc.status === "AKTIF" && !timeInfo.isExpired
+                            ? "Aktif"
+                            : "Nonaktif"}
+                        </button>
+                      </td>
+                      <td className="py-3.5 px-3 text-right">
+                        <div className="inline-flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => onLoginAsAccount(acc)}
+                            title="Masuk / Uji Akun Ini"
+                            className="px-2.5 py-1.5 rounded-lg bg-navy-800 hover:bg-emerald-600 text-white text-[11px] font-bold inline-flex items-center gap-1 transition"
+                          >
+                            <LogIn className="w-3 h-3" />
+                            <span>Masuk</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setExtendTargetAccount(acc);
+                              setExtendMonths(1);
+                            }}
+                            title="Perpanjang Waktu Aktif"
+                            className="px-2.5 py-1.5 rounded-lg border border-emerald-500 text-emerald-700 hover:bg-emerald-50 text-[11px] font-bold inline-flex items-center gap-1"
+                          >
+                            <CalendarPlus className="w-3 h-3" />
+                            <span>Perpanjang</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onDeleteAccount(acc.id)}
+                            title="Hapus Akun"
+                            className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-50"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
       </div>
+
+      {/* MODAL BUAT AKUN BARU (OWNER / KASIR) */}
+      {showAccountModal && (
+        <div className="fixed inset-0 z-50 bg-navy-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[92vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="text-lg font-extrabold text-navy-800">
+                Buat Akun Baru (Owner / Kasir)
+              </h3>
+              <button
+                onClick={() => setShowAccountModal(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={handleCreateAccountSubmit}
+              className="space-y-3.5 text-sm"
+            >
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Pilih Role Akun
+                </label>
+                <div className="grid grid-cols-2 gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setAccRole("OWNER")}
+                    className={`py-2.5 px-3 rounded-xl border text-xs font-extrabold transition ${
+                      accRole === "OWNER"
+                        ? "bg-emerald-50 border-emerald-500 text-emerald-700 ring-1 ring-emerald-500"
+                        : "border-slate-200 text-slate-600"
+                    }`}
+                  >
+                    Owner Bisnis
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAccRole("CASHIER")}
+                    className={`py-2.5 px-3 rounded-xl border text-xs font-extrabold transition ${
+                      accRole === "CASHIER"
+                        ? "bg-sky-50 border-sky-500 text-sky-700 ring-1 ring-sky-500"
+                        : "border-slate-200 text-slate-600"
+                    }`}
+                  >
+                    Kasir Operasional
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Nama Lengkap
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={accName}
+                    onChange={(e) => setAccName(e.target.value)}
+                    placeholder="Contoh: Andi / Siti"
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Nama Toko / Bisnis
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={accStoreName}
+                    onChange={(e) => setAccStoreName(e.target.value)}
+                    placeholder="Contoh: Toko Utama"
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Username Login
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={accUsername}
+                    onChange={(e) => setAccUsername(e.target.value)}
+                    placeholder="Contoh: andi.owner"
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Password Login
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={accPassword}
+                    onChange={(e) => setAccPassword(e.target.value)}
+                    placeholder="Minimal 4 karakter"
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Tentukan Masa Aktif Akun (Berapa Bulan / Setahun)
+                </label>
+                <div className="grid grid-cols-4 gap-2 mb-2">
+                  {[
+                    { label: "1 Bulan", val: 1 },
+                    { label: "3 Bulan", val: 3 },
+                    { label: "6 Bulan", val: 6 },
+                    { label: "1 Tahun", val: 12 },
+                  ].map((preset) => (
+                    <button
+                      key={preset.val}
+                      type="button"
+                      onClick={() => setAccDurationMonths(preset.val)}
+                      className={`py-2 rounded-xl border text-xs font-bold transition ${
+                        accDurationMonths === preset.val
+                          ? "bg-emerald-500 text-white border-emerald-500"
+                          : "bg-slate-50 border-slate-200 text-navy-800 hover:border-emerald-400"
+                      }`}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={1}
+                    max={120}
+                    required
+                    value={accDurationMonths}
+                    onChange={(e) =>
+                      setAccDurationMonths(Number(e.target.value))
+                    }
+                    className="w-28 px-3.5 py-2 rounded-xl border border-slate-200 font-bold text-center"
+                  />
+                  <span className="text-xs font-semibold text-slate-600">
+                    Bulan • Aktif hingga{" "}
+                    <b className="text-emerald-700">
+                      {formatDateOnly(
+                        addMonthsToIso(
+                          new Date().toISOString(),
+                          Math.max(1, accDurationMonths || 1)
+                        )
+                      )}
+                    </b>
+                  </span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Email (Opsional)
+                </label>
+                <input
+                  type="email"
+                  value={accEmail}
+                  onChange={(e) => setAccEmail(e.target.value)}
+                  placeholder="email@toko.id"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200"
+                />
+              </div>
+
+              {accError && (
+                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs font-bold text-rose-600">
+                  {accError}
+                </div>
+              )}
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowAccountModal(false)}
+                  className="flex-1 py-2.5 rounded-xl border border-slate-200 font-bold text-slate-600"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-bold"
+                >
+                  Simpan & Aktifkan Akun
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL PERPANJANG MASA AKTIF AKUN */}
+      {extendTargetAccount && (
+        <div className="fixed inset-0 z-50 bg-navy-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="text-lg font-extrabold text-navy-800">
+                Perpanjang Masa Aktif Akun
+              </h3>
+              <button
+                onClick={() => setExtendTargetAccount(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="text-xs text-slate-600 space-y-1">
+              <p>
+                Akun: <b>{extendTargetAccount.name}</b> (@
+                {extendTargetAccount.username})
+              </p>
+              <p>
+                Berakhir saat ini:{" "}
+                <b>{formatDateOnly(extendTargetAccount.expiresAt)}</b> (
+                {getRemainingTimeInfo(extendTargetAccount.expiresAt).label})
+              </p>
+            </div>
+
+            <div className="grid grid-cols-4 gap-2">
+              {[
+                { label: "+1 Bln", val: 1 },
+                { label: "+3 Bln", val: 3 },
+                { label: "+6 Bln", val: 6 },
+                { label: "+1 Thn", val: 12 },
+              ].map((p) => (
+                <button
+                  key={p.val}
+                  type="button"
+                  onClick={() => setExtendMonths(p.val)}
+                  className={`py-2 rounded-xl border text-xs font-bold ${
+                    extendMonths === p.val
+                      ? "bg-emerald-500 text-white border-emerald-500"
+                      : "bg-slate-50 border-slate-200 text-navy-800"
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex items-center gap-2 text-xs">
+              <input
+                type="number"
+                min={1}
+                value={extendMonths}
+                onChange={(e) => setExtendMonths(Number(e.target.value))}
+                className="w-24 px-3 py-2 rounded-xl border border-slate-200 font-bold text-center"
+              />
+              <span className="text-slate-600">Bulan tambahan</span>
+            </div>
+
+            <div className="flex gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setExtendTargetAccount(null)}
+                className="flex-1 py-2.5 rounded-xl border border-slate-200 font-bold text-slate-600"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onExtendAccount(
+                    extendTargetAccount.id,
+                    Math.max(1, extendMonths || 1)
+                  );
+                  setExtendTargetAccount(null);
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-emerald-500 text-white font-bold"
+              >
+                Simpan Perpanjangan
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

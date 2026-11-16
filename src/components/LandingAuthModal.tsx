@@ -6,41 +6,73 @@ import {
   ArrowRight,
   ShieldCheck,
   Sparkles,
-  UserCheck,
-  Building2,
+  Lock,
+  User,
+  Clock,
   X,
 } from "lucide-react";
-import { UserRole } from "@/types/nextpos";
+import { ManagedAccount, UserRole } from "@/types/nextpos";
+import { getRemainingTimeInfo } from "@/lib/format";
 
 interface LandingAuthModalProps {
   isOpen: boolean;
   currentRole: UserRole;
+  accounts: ManagedAccount[];
   onClose: () => void;
-  onSelectRole: (
-    role: UserRole,
-    customName?: string,
-    customStore?: string
-  ) => void;
+  onSelectRole: (role: UserRole, customAccount?: ManagedAccount) => void;
 }
 
 export function LandingAuthModal({
   isOpen,
   currentRole,
+  accounts,
   onClose,
   onSelectRole,
 }: LandingAuthModalProps) {
-  const [tab, setTab] = useState<"demo" | "register">("demo");
-  const [ownerName, setOwnerName] = useState("");
-  const [storeName, setStoreName] = useState("");
-  const [email, setEmail] = useState("");
-  const [businessType, setBusinessType] = useState("Kafe & Kedai Kopi");
+  const [tab, setTab] = useState<"quick" | "login">("quick");
+  const [usernameInput, setUsernameInput] = useState("");
+  const [passwordInput, setPasswordInput] = useState("");
+  const [loginError, setLoginError] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
-  const handleRegisterSubmit = (e: React.FormEvent) => {
+  const handleCredentialLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!ownerName.trim() || !storeName.trim()) return;
-    onSelectRole("OWNER", ownerName.trim(), storeName.trim());
+    setLoginError(null);
+
+    const uname = usernameInput.trim().toLowerCase();
+    const pwd = passwordInput;
+
+    // Built-in Super Admin shortcut
+    if (uname === "superadmin" && pwd === "admin123") {
+      onSelectRole("SUPER_ADMIN");
+      setUsernameInput("");
+      setPasswordInput("");
+      onClose();
+      return;
+    }
+
+    const found = accounts.find(
+      (a) => a.username.toLowerCase() === uname && a.password === pwd
+    );
+    if (!found) {
+      setLoginError(
+        "Username atau password salah. Gunakan akun yang telah dibuat oleh Super Admin."
+      );
+      return;
+    }
+
+    const timeInfo = getRemainingTimeInfo(found.expiresAt);
+    if (found.status !== "AKTIF" || timeInfo.isExpired) {
+      setLoginError(
+        `Akun "${found.name}" sudah habis masa aktifnya atau dinonaktifkan (${timeInfo.label}). Hubungi Super Admin untuk perpanjangan.`
+      );
+      return;
+    }
+
+    onSelectRole(found.role, found);
+    setUsernameInput("");
+    setPasswordInput("");
     onClose();
   };
 
@@ -60,7 +92,7 @@ export function LandingAuthModal({
 
             <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 text-xs font-bold">
               <Sparkles className="w-3.5 h-3.5" />
-              <span>Multi-Tenant SaaS POS</span>
+              <span>Sistem Kasir Modern KELOKRA</span>
             </div>
 
             <h2 className="text-2xl font-extrabold leading-snug">
@@ -74,43 +106,46 @@ export function LandingAuthModal({
               </li>
               <li className="flex items-center gap-2.5">
                 <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span>Aman & Terpercaya (Isolasi Data RLS)</span>
+                <span>Manajemen Akun & Durasi oleh Super Admin</span>
               </li>
               <li className="flex items-center gap-2.5">
                 <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span>Bisa di Mana Saja (Mendukung Offline PWA)</span>
+                <span>Dukungan QRIS, M-Banking, E-Wallet & Offline PWA</span>
               </li>
             </ul>
           </div>
 
           <div className="pt-8 z-10 text-xs text-slate-400">
-            Gratis Trial 14 Hari • Tanpa Kartu Kredit
+            KELOKRA Point of Sale • Aman & Terpercaya
           </div>
         </div>
 
-        {/* Right Interactive Switcher / Registration Form */}
-        <div className="md:col-span-7 bg-white text-navy-800 p-7 space-y-5">
+        {/* Right Interactive Switcher / Login Form */}
+        <div className="md:col-span-7 bg-white text-navy-800 p-7 space-y-5 max-h-[88vh] overflow-y-auto">
           <div className="flex items-center justify-between">
             <div className="inline-flex rounded-xl bg-slate-100 p-1 text-xs font-bold">
               <button
-                onClick={() => setTab("demo")}
+                onClick={() => setTab("quick")}
                 className={`px-3.5 py-1.5 rounded-lg transition ${
-                  tab === "demo"
+                  tab === "quick"
                     ? "bg-white text-navy-800 shadow-xs"
                     : "text-slate-500"
                 }`}
               >
-                Pilih Peran Akses
+                Pilih Role / Akun
               </button>
               <button
-                onClick={() => setTab("register")}
+                onClick={() => {
+                  setLoginError(null);
+                  setTab("login");
+                }}
                 className={`px-3.5 py-1.5 rounded-lg transition ${
-                  tab === "register"
+                  tab === "login"
                     ? "bg-white text-navy-800 shadow-xs"
                     : "text-slate-500"
                 }`}
               >
-                Daftar Bisnis Baru (Trial 14 Hari)
+                Login Akun
               </button>
             </div>
 
@@ -122,31 +157,58 @@ export function LandingAuthModal({
             </button>
           </div>
 
-          {tab === "demo" ? (
+          {tab === "quick" ? (
             <div className="space-y-4">
               <div>
                 <h3 className="text-lg font-extrabold text-navy-800">
-                  Pilih Peran Pengguna (RBAC KELOKRA)
+                  Pilih Role atau Akun Terdaftar
                 </h3>
                 <p className="text-xs text-slate-500">
-                  Pilih salah satu peran di bawah untuk mengakses modul sesuai hak akses:
+                  Berpindah antar role Super Admin, Owner, maupun akun Kasir/Owner yang dibuat oleh Super Admin:
                 </p>
               </div>
 
               <div className="space-y-2.5">
                 <button
                   onClick={() => {
+                    onSelectRole("SUPER_ADMIN");
+                    onClose();
+                  }}
+                  className={`w-full p-3.5 rounded-2xl border text-left transition flex items-center justify-between ${
+                    currentRole === "SUPER_ADMIN"
+                      ? "border-emerald-500 bg-emerald-50/50 ring-2 ring-emerald-500/20"
+                      : "border-slate-200 hover:border-emerald-400"
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-navy-800 text-amber-400 font-extrabold flex items-center justify-center shrink-0">
+                      SA
+                    </div>
+                    <div>
+                      <p className="text-sm font-extrabold text-navy-800">
+                        Super Admin KELOKRA
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        Buat akun Owner & Kasir, atur durasi bulan/tahun & pantau sisa waktu
+                      </p>
+                    </div>
+                  </div>
+                  <ArrowRight className="w-4 h-4 text-emerald-600 shrink-0" />
+                </button>
+
+                <button
+                  onClick={() => {
                     onSelectRole("OWNER");
                     onClose();
                   }}
-                  className={`w-full p-4 rounded-2xl border text-left transition flex items-center justify-between ${
+                  className={`w-full p-3.5 rounded-2xl border text-left transition flex items-center justify-between ${
                     currentRole === "OWNER"
                       ? "border-emerald-500 bg-emerald-50/50 ring-2 ring-emerald-500/20"
                       : "border-slate-200 hover:border-emerald-400"
                   }`}
                 >
-                  <div className="flex items-center gap-3.5">
-                    <div className="w-10 h-10 rounded-xl bg-emerald-500 text-white font-extrabold flex items-center justify-center">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-emerald-500 text-white font-extrabold flex items-center justify-center shrink-0">
                       OW
                     </div>
                     <div>
@@ -154,7 +216,7 @@ export function LandingAuthModal({
                         Owner Bisnis
                       </p>
                       <p className="text-xs text-slate-500">
-                        Akses penuh: Dashboard, POS, Produk, HPP, Laporan Laba, Karyawan & Langganan
+                        Atur Metode Pembayaran (QRIS/Bank/E-Wallet), Produk, Stok & Laporan Laba
                       </p>
                     </div>
                   </div>
@@ -166,14 +228,14 @@ export function LandingAuthModal({
                     onSelectRole("CASHIER");
                     onClose();
                   }}
-                  className={`w-full p-4 rounded-2xl border text-left transition flex items-center justify-between ${
+                  className={`w-full p-3.5 rounded-2xl border text-left transition flex items-center justify-between ${
                     currentRole === "CASHIER"
                       ? "border-emerald-500 bg-emerald-50/50 ring-2 ring-emerald-500/20"
                       : "border-slate-200 hover:border-emerald-400"
                   }`}
                 >
-                  <div className="flex items-center gap-3.5">
-                    <div className="w-10 h-10 rounded-xl bg-sky-500 text-white font-extrabold flex items-center justify-center">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-sky-500 text-white font-extrabold flex items-center justify-center shrink-0">
                       KS
                     </div>
                     <div>
@@ -181,126 +243,118 @@ export function LandingAuthModal({
                         Kasir Operasional
                       </p>
                       <p className="text-xs text-slate-500">
-                        Akses fokus: Transaksi POS Cepat, Cetak Struk, Stok Produk & Shift Kasir
-                      </p>
-                    </div>
-                  </div>
-                  <ArrowRight className="w-4 h-4 text-emerald-600 shrink-0" />
-                </button>
-
-                <button
-                  onClick={() => {
-                    onSelectRole("SUPER_ADMIN");
-                    onClose();
-                  }}
-                  className={`w-full p-4 rounded-2xl border text-left transition flex items-center justify-between ${
-                    currentRole === "SUPER_ADMIN"
-                      ? "border-emerald-500 bg-emerald-50/50 ring-2 ring-emerald-500/20"
-                      : "border-slate-200 hover:border-emerald-400"
-                  }`}
-                >
-                  <div className="flex items-center gap-3.5">
-                    <div className="w-10 h-10 rounded-xl bg-navy-800 text-amber-400 font-extrabold flex items-center justify-center">
-                      SA
-                    </div>
-                    <div>
-                      <p className="text-sm font-extrabold text-navy-800">
-                        Super Admin Platform (Pemilik SaaS KELOKRA)
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        Kelola seluruh Tenant, pantau MRR, paket langganan & audit platform
+                        Transaksi POS, QRIS/Transfer/Tunai, Cetak Struk & Shift Kasir
                       </p>
                     </div>
                   </div>
                   <ArrowRight className="w-4 h-4 text-emerald-600 shrink-0" />
                 </button>
               </div>
+
+              {accounts.length > 0 && (
+                <div className="pt-2 border-t border-slate-100 space-y-2">
+                  <p className="text-xs font-extrabold text-slate-500 uppercase">
+                    Akun Buatan Super Admin ({accounts.length})
+                  </p>
+                  <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
+                    {accounts.map((acc) => {
+                      const timeInfo = getRemainingTimeInfo(acc.expiresAt);
+                      const blocked =
+                        acc.status !== "AKTIF" || timeInfo.isExpired;
+                      return (
+                        <button
+                          key={acc.id}
+                          disabled={blocked}
+                          onClick={() => {
+                            onSelectRole(acc.role, acc);
+                            onClose();
+                          }}
+                          className="w-full p-3 rounded-xl border border-slate-200 hover:border-emerald-500 disabled:opacity-50 text-left flex items-center justify-between gap-2 text-xs"
+                        >
+                          <div>
+                            <p className="font-extrabold text-navy-800">
+                              {acc.name}{" "}
+                              <span className="font-normal text-slate-400">
+                                (@{acc.username}) •{" "}
+                                {acc.role === "OWNER" ? "Owner" : "Kasir"}
+                              </span>
+                            </p>
+                            <p className="text-[11px] text-emerald-600 font-semibold flex items-center gap-1 mt-0.5">
+                              <Clock className="w-3 h-3" />
+                              <span>{timeInfo.label}</span>
+                            </p>
+                          </div>
+                          <span className="text-emerald-600 font-bold">
+                            {blocked ? "Habis" : "Masuk →"}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <form
-              onSubmit={handleRegisterSubmit}
+              onSubmit={handleCredentialLogin}
               className="space-y-3.5 text-sm"
             >
               <div>
                 <h3 className="text-lg font-extrabold text-navy-800">
-                  Registrasi Bisnis Baru (Gratis Trial 14 Hari)
+                  Login Akun KELOKRA
                 </h3>
                 <p className="text-xs text-slate-500">
-                  Sistem membuat tenant terisolasi dan langsung mengaktifkan masa percobaan 14 hari.
+                  Masukkan username dan password akun Owner atau Kasir yang telah dibuat oleh Super Admin (atau{" "}
+                  <code className="bg-slate-100 px-1 rounded">superadmin</code> /{" "}
+                  <code className="bg-slate-100 px-1 rounded">admin123</code>).
                 </p>
               </div>
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Nama Pemilik (Owner)
+                  Username
                 </label>
                 <div className="relative">
-                  <UserCheck className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                   <input
                     type="text"
                     required
-                    value={ownerName}
-                    onChange={(e) => setOwnerName(e.target.value)}
-                    placeholder="Masukkan nama pemilik..."
+                    value={usernameInput}
+                    onChange={(e) => setUsernameInput(e.target.value)}
+                    placeholder="Masukkan username..."
                     className="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-slate-200"
                   />
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Nama Toko / Bisnis
-                  </label>
-                  <div className="relative">
-                    <Building2 className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                    <input
-                      type="text"
-                      required
-                      value={storeName}
-                      onChange={(e) => setStoreName(e.target.value)}
-                      placeholder="Masukkan nama toko..."
-                      className="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-slate-200"
-                    />
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Jenis Usaha
-                  </label>
-                  <select
-                    value={businessType}
-                    onChange={(e) => setBusinessType(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white"
-                  >
-                    <option>Kafe & Kedai Kopi</option>
-                    <option>Toko Kelontong / Minimarket</option>
-                    <option>Restoran / Kuliner</option>
-                    <option>Barbershop & Jasa</option>
-                    <option>Apotek & Ritel</option>
-                  </select>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Password
+                </label>
+                <div className="relative">
+                  <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="password"
+                    required
+                    value={passwordInput}
+                    onChange={(e) => setPasswordInput(e.target.value)}
+                    placeholder="Masukkan password..."
+                    className="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-slate-200"
+                  />
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Email Bisnis
-                </label>
-                <input
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="owner@bisnisanda.id"
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200"
-                />
-              </div>
+              {loginError && (
+                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs font-bold text-rose-600">
+                  {loginError}
+                </div>
+              )}
 
               <button
                 type="submit"
-                className="w-full py-3 rounded-xl bg-amber-400 hover:bg-amber-500 text-navy-900 font-extrabold text-sm shadow-md transition flex items-center justify-center gap-2"
+                className="w-full py-3 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-extrabold text-sm shadow-md transition flex items-center justify-center gap-2"
               >
-                <span>Mulai Sekarang (Aktifkan Trial 14 Hari)</span>
+                <span>Masuk ke KELOKRA</span>
                 <ArrowRight className="w-4 h-4" />
               </button>
             </form>
