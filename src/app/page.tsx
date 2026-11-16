@@ -24,10 +24,12 @@ import {
   Menu,
   X,
   Clock,
+  LogOut,
   CheckCircle2,
 } from "lucide-react";
 import {
   AuditLogEntry,
+  AuthSession,
   CashShiftRecord,
   Customer,
   ExpenseRecord,
@@ -39,7 +41,6 @@ import {
   StockMovement,
   StoreSettings,
   Supplier,
-  UserRole,
 } from "@/types/nextpos";
 import {
   DEFAULT_TENANT_ID,
@@ -69,18 +70,21 @@ import { PosView } from "@/components/views/PosView";
 import { ProductsInventoryView } from "@/components/views/ProductsInventoryView";
 import { ReportsFinanceView } from "@/components/views/ReportsFinanceView";
 import { SaasSettingsAdminView } from "@/components/views/SaasSettingsAdminView";
-import { LandingAuthModal } from "@/components/LandingAuthModal";
+import { LoginScreen } from "@/components/LoginScreen";
 
 const STORAGE_KEY = "kelokra_saas_state_v2";
+const SESSION_STORAGE_KEY = "kelokra_auth_session_v1";
 
 export default function KelokraApp() {
-  // Navigation & RBAC state
+  // Authentication & Session state
+  const [authSession, setAuthSession] = useState<AuthSession | null>(null);
+  const [isAuthChecking, setIsAuthChecking] = useState(true);
+  const [loginNotice, setLoginNotice] = useState<string | null>(null);
+
+  // Navigation & UI state
   const [activeMenu, setActiveMenu] = useState<string>("dashboard");
-  const [currentRole, setCurrentRole] = useState<UserRole>("OWNER");
-  const [currentUserName, setCurrentUserName] = useState<string>("Owner");
-  const [activeAccountId, setActiveAccountId] = useState<string | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
 
   // Command Search state
@@ -122,11 +126,14 @@ export default function KelokraApp() {
     }, 3500);
   };
 
-  // Load persisted state from localStorage
+  // Load persisted business data + auth session on mount
   useEffect(() => {
+    let loadedAccounts: ManagedAccount[] = INITIAL_MANAGED_ACCOUNTS;
+
     try {
       localStorage.removeItem("nextpos_saas_state_v1_1");
       localStorage.removeItem("kelokra_saas_state_v1");
+
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
@@ -139,7 +146,10 @@ export default function KelokraApp() {
         if (parsed.customers) setCustomers(parsed.customers);
         if (parsed.expenses) setExpenses(parsed.expenses);
         if (parsed.shifts) setShifts(parsed.shifts);
-        if (parsed.accounts) setAccounts(parsed.accounts);
+        if (parsed.accounts) {
+          loadedAccounts = parsed.accounts;
+          setAccounts(parsed.accounts);
+        }
         if (parsed.storeSettings) {
           setStoreSettings({
             ...INITIAL_STORE_SETTINGS,
@@ -148,8 +158,38 @@ export default function KelokraApp() {
         }
         if (parsed.auditLogs) setAuditLogs(parsed.auditLogs);
       }
+
+      const savedSession = localStorage.getItem(SESSION_STORAGE_KEY);
+      if (savedSession) {
+        const parsedSession = JSON.parse(savedSession) as AuthSession;
+        if (parsedSession.role === "SUPER_ADMIN") {
+          setAuthSession(parsedSession);
+          setActiveMenu("super-admin");
+        } else if (parsedSession.accountId) {
+          const matchedAcc = loadedAccounts.find(
+            (a) => a.id === parsedSession.accountId
+          );
+          if (
+            matchedAcc &&
+            matchedAcc.status === "AKTIF" &&
+            !getRemainingTimeInfo(matchedAcc.expiresAt).isExpired
+          ) {
+            setAuthSession(parsedSession);
+            setActiveMenu(
+              parsedSession.role === "CASHIER" ? "pos" : "dashboard"
+            );
+          } else {
+            localStorage.removeItem(SESSION_STORAGE_KEY);
+            setLoginNotice(
+              "Sesi Anda telah berakhir karena masa aktif akun habis atau dinonaktifkan oleh Super Admin."
+            );
+          }
+        }
+      }
     } catch {
       // Ignore storage error
+    } finally {
+      setIsAuthChecking(false);
     }
 
     if ("serviceWorker" in navigator) {
@@ -166,8 +206,9 @@ export default function KelokraApp() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  // Save state changes to localStorage
+  // Save business state changes to localStorage
   useEffect(() => {
+    if (isAuthChecking) return;
     try {
       localStorage.setItem(
         STORAGE_KEY,
@@ -190,6 +231,7 @@ export default function KelokraApp() {
       // Ignore quota errors
     }
   }, [
+    isAuthChecking,
     products,
     sales,
     movements,
@@ -203,6 +245,9 @@ export default function KelokraApp() {
     storeSettings,
     auditLogs,
   ]);
+
+  const currentRole = authSession?.role || "OWNER";
+  const currentUserName = authSession?.name || "Pengguna";
 
   const appendAudit = (action: string, module: string, details: string) => {
     const newEntry: AuditLogEntry = {
@@ -220,6 +265,94 @@ export default function KelokraApp() {
       details,
     };
     setAuditLogs((prev) => [newEntry, ...prev]);
+  };
+
+  // Login Success Handler
+  const handleLoginSuccess = (session: AuthSession) => {
+    setAuthSession(session);
+    setLoginNotice(null);
+    setShowProfileMenu(false);
+
+    try {
+      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+    } catch {
+      // Ignore storage error
+    }
+
+    if (session.accountId) {
+      setStoreSettings((prev) => ({
+        ...prev,
+        storeName: session.storeName || prev.storeName,
+      }));
+      setAccounts((prev) =>
+        prev.map((a) =>
+          a.id === session.accountId
+            ? {
+                ...a,
+                lastLogin: `${new Date().toLocaleDateString(
+                  "id-ID"
+                )} ${formatShortTime()}`,
+              }
+            : a
+        )
+      );
+    }
+
+    setAuditLogs((prev) => [
+      {
+        id: generateId("aud"),
+        timestamp: `${new Date().toLocaleDateString("id-ID")} ${formatShortTime()}`,
+        actor: session.name,
+        role:
+          session.role === "OWNER"
+            ? "Owner"
+            : session.role === "CASHIER"
+            ? "Kasir"
+            : "Super Admin",
+        action: "USER_LOGIN",
+        module: "Auth",
+        details: `Login berhasil ke akun @${session.username} (${session.role}).`,
+      },
+      ...prev,
+    ]);
+
+    if (session.role === "SUPER_ADMIN") {
+      setActiveMenu("super-admin");
+    } else if (session.role === "CASHIER") {
+      setActiveMenu("pos");
+    } else {
+      setActiveMenu("dashboard");
+    }
+
+    showToast(`Selamat datang, ${session.name}!`);
+  };
+
+  // Logout Handler
+  const handleLogout = async () => {
+    if (authSession) {
+      appendAudit(
+        "USER_LOGOUT",
+        "Auth",
+        `Akun @${authSession.username} (${authSession.role}) keluar dari sistem.`
+      );
+    }
+
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } catch {
+      // Ignore network error if offline
+    }
+
+    try {
+      localStorage.removeItem(SESSION_STORAGE_KEY);
+    } catch {
+      // Ignore storage error
+    }
+
+    setAuthSession(null);
+    setShowProfileMenu(false);
+    setMobileMenuOpen(false);
+    setLoginNotice("Anda telah berhasil logout dari sistem.");
   };
 
   // Handler 1: Complete POS Sale
@@ -555,62 +688,44 @@ export default function KelokraApp() {
     showToast(`Retur ${ret.returnNumber} berhasil dicatat!`);
   };
 
-  // Handler 6: Role Switcher & Login into Super-Admin Created Account
-  const handleSelectRole = (role: UserRole, customAccount?: ManagedAccount) => {
-    setCurrentRole(role);
+  // Loading state while checking localStorage auth session
+  if (isAuthChecking) {
+    return (
+      <div className="min-h-screen bg-[#F8FAFC] flex flex-col items-center justify-center p-4 space-y-4">
+        <div className="bg-white rounded-2xl px-6 py-4 shadow-md border border-slate-200/80">
+          <img
+            src="/kelokra-logo.png"
+            alt="KELOKRA Logo"
+            className="h-9 w-auto object-contain"
+          />
+        </div>
+        <p className="text-xs font-bold text-slate-500 animate-pulse">
+          Memeriksa sesi login KELOKRA...
+        </p>
+      </div>
+    );
+  }
 
-    if (customAccount) {
-      setActiveAccountId(customAccount.id);
-      setCurrentUserName(customAccount.name);
-      setStoreSettings((prev) => ({
-        ...prev,
-        storeName: customAccount.storeName || prev.storeName,
-      }));
-      setAccounts((prev) =>
-        prev.map((a) =>
-          a.id === customAccount.id
-            ? {
-                ...a,
-                lastLogin: `${new Date().toLocaleDateString(
-                  "id-ID"
-                )} ${formatShortTime()}`,
-              }
-            : a
-        )
-      );
-      setActiveMenu(role === "CASHIER" ? "pos" : "dashboard");
-      showToast(
-        `Login berhasil sebagai ${customAccount.name} (${
-          role === "OWNER" ? "Owner" : "Kasir"
-        })`
-      );
-      return;
-    }
+  // Gate: Show LoginScreen if user is not authenticated
+  if (!authSession) {
+    return (
+      <LoginScreen
+        accounts={accounts}
+        defaultStoreName={storeSettings.storeName}
+        externalNotice={loginNotice}
+        onLoginSuccess={handleLoginSuccess}
+      />
+    );
+  }
 
-    setActiveAccountId(null);
-    if (role === "OWNER") {
-      setCurrentUserName("Owner");
-      setActiveMenu("dashboard");
-      showToast("Berpindah ke tampilan Owner Bisnis");
-    } else if (role === "CASHIER") {
-      setCurrentUserName("Kasir");
-      setActiveMenu("pos");
-      showToast("Berpindah ke tampilan Kasir Operasional");
-    } else {
-      setCurrentUserName("Super Admin KELOKRA");
-      setActiveMenu("super-admin");
-      showToast("Berpindah ke Panel Super Admin KELOKRA");
-    }
-  };
-
-  const activeAccount = activeAccountId
-    ? accounts.find((a) => a.id === activeAccountId) || null
+  const activeAccount = authSession.accountId
+    ? accounts.find((a) => a.id === authSession.accountId) || null
     : null;
   const activeAccountTime = activeAccount
     ? getRemainingTimeInfo(activeAccount.expiresAt)
     : null;
 
-  // Navigation items filtered by Role (NO Langganan menu!)
+  // Strict RBAC Navigation Items
   const navItems = [
     {
       id: "dashboard",
@@ -676,8 +791,7 @@ export default function KelokraApp() {
       id: "super-admin",
       label: "Super Admin",
       icon: ShieldCheck,
-      // Visible to SUPER_ADMIN, and also visible in default preview mode (!activeAccount) for easy switching
-      roles: activeAccount ? ["SUPER_ADMIN"] : ["OWNER", "SUPER_ADMIN"],
+      roles: ["SUPER_ADMIN"],
     },
   ].filter((item) => item.roles.includes(currentRole));
 
@@ -694,7 +808,11 @@ export default function KelokraApp() {
         <div className="p-5 space-y-6 overflow-y-auto">
           <div className="flex items-center justify-between gap-2">
             <div
-              onClick={() => setActiveMenu("dashboard")}
+              onClick={() =>
+                setActiveMenu(
+                  currentRole === "SUPER_ADMIN" ? "super-admin" : "dashboard"
+                )
+              }
               className="cursor-pointer select-none flex-1"
             >
               <div className="bg-white rounded-xl px-3 py-2 inline-flex items-center justify-center shadow-sm">
@@ -743,7 +861,7 @@ export default function KelokraApp() {
           </nav>
         </div>
 
-        {/* Bottom Sidebar Widgets (Replaced Langganan with Account Remaining Time + Offline Sync) */}
+        {/* Bottom Sidebar Widgets */}
         <div className="p-4 space-y-3 border-t border-white/10">
           <div className="p-3 rounded-xl bg-white/5 border border-white/10 space-y-2">
             <div className="flex items-center justify-between">
@@ -775,16 +893,12 @@ export default function KelokraApp() {
             </p>
           </div>
 
-          {/* Masa Aktif Akun Card (NO Langganan / NO Upgrade!) */}
+          {/* Masa Aktif Akun Card */}
           <div className="p-3.5 rounded-2xl bg-gradient-to-br from-emerald-950/90 to-navy-900 border border-emerald-500/30 space-y-1">
             <div className="flex items-center gap-1.5 text-emerald-400 text-[11px] font-extrabold">
               <Clock className="w-3.5 h-3.5" />
               <span>
-                {activeAccount
-                  ? "Masa Aktif Akun"
-                  : currentRole === "SUPER_ADMIN"
-                  ? "Super Admin Aktif"
-                  : "Status Akses Role"}
+                {activeAccount ? "Masa Aktif Akun" : "Super Admin Platform"}
               </span>
             </div>
             {activeAccount && activeAccountTime ? (
@@ -798,9 +912,7 @@ export default function KelokraApp() {
               </>
             ) : (
               <p className="text-[11px] text-slate-300">
-                {currentRole === "SUPER_ADMIN"
-                  ? `${accounts.length} akun Owner & Kasir dikelola`
-                  : "Gunakan Super Admin untuk buat akun berdurasi"}
+                {accounts.length} akun Owner & Kasir aktif dikelola
               </p>
             )}
           </div>
@@ -833,6 +945,13 @@ export default function KelokraApp() {
             >
               <HelpCircle className="w-4 h-4" />
               <span>Bantuan</span>
+            </button>
+            <button
+              onClick={handleLogout}
+              className="w-full flex items-center gap-3 px-3.5 py-2 rounded-xl text-xs font-bold text-rose-300 hover:text-white hover:bg-rose-500/20 transition"
+            >
+              <LogOut className="w-4 h-4" />
+              <span>Keluar (Logout)</span>
             </button>
           </div>
         </div>
@@ -935,13 +1054,6 @@ export default function KelokraApp() {
               )}
             </button>
 
-            <button
-              onClick={() => setShowAuthModal(true)}
-              className="px-3 py-1.5 rounded-xl bg-navy-800 hover:bg-navy-700 text-white text-xs font-bold transition hidden sm:flex items-center gap-1.5"
-            >
-              <span>Ganti Role / Login</span>
-            </button>
-
             <div className="relative">
               <button
                 onClick={() => setShowNotifications((v) => !v)}
@@ -981,31 +1093,87 @@ export default function KelokraApp() {
               )}
             </div>
 
+            {/* Profile Dropdown with Logout */}
+            <div className="relative">
+              <button
+                onClick={() => setShowProfileMenu((v) => !v)}
+                className="flex items-center gap-2.5 pl-2 pr-3 py-1.5 rounded-xl hover:bg-slate-100 transition text-left"
+              >
+                <div className="w-8 h-8 rounded-full bg-emerald-500 text-white font-extrabold text-xs flex items-center justify-center shrink-0">
+                  {currentUserName
+                    .split(" ")
+                    .map((n) => n[0])
+                    .join("")
+                    .slice(0, 2)
+                    .toUpperCase()}
+                </div>
+                <div className="hidden md:block">
+                  <p className="text-xs font-extrabold text-navy-800 leading-tight">
+                    {currentUserName}
+                  </p>
+                  <p className="text-[11px] text-slate-500 leading-tight">
+                    {currentRole === "OWNER"
+                      ? "Owner"
+                      : currentRole === "CASHIER"
+                      ? "Kasir"
+                      : "Super Admin"}
+                  </p>
+                </div>
+                <ChevronDown className="w-3.5 h-3.5 text-slate-400 hidden md:block" />
+              </button>
+
+              {showProfileMenu && (
+                <div className="absolute right-0 top-12 w-64 bg-white rounded-2xl border border-slate-200 shadow-xl p-3 z-50 space-y-2.5 text-xs">
+                  <div className="pb-2 border-b border-slate-100">
+                    <p className="font-extrabold text-navy-800 text-sm">
+                      {authSession.name}
+                    </p>
+                    <p className="text-slate-500 font-mono text-[11px]">
+                      @{authSession.username} •{" "}
+                      {currentRole === "OWNER"
+                        ? "Owner"
+                        : currentRole === "CASHIER"
+                        ? "Kasir"
+                        : "Super Admin"}
+                    </p>
+                    {activeAccountTime && (
+                      <p className="text-emerald-600 font-bold text-[11px] mt-1 flex items-center gap-1">
+                        <Clock className="w-3 h-3" />
+                        <span>{activeAccountTime.label}</span>
+                      </p>
+                    )}
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      setActiveMenu("settings");
+                      setShowProfileMenu(false);
+                    }}
+                    className="w-full text-left px-3 py-2 rounded-xl hover:bg-slate-50 font-bold text-navy-800 flex items-center gap-2"
+                  >
+                    <Settings className="w-4 h-4 text-slate-500" />
+                    <span>Pengaturan Akun & Toko</span>
+                  </button>
+
+                  <button
+                    onClick={handleLogout}
+                    className="w-full text-left px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 font-extrabold text-rose-600 flex items-center gap-2 transition"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    <span>Keluar (Logout)</span>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Direct Logout Button on Header */}
             <button
-              onClick={() => setShowAuthModal(true)}
-              className="flex items-center gap-2.5 pl-2 pr-3 py-1.5 rounded-xl hover:bg-slate-100 transition text-left"
+              onClick={handleLogout}
+              title="Keluar / Logout"
+              className="px-3 py-1.5 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-600 text-xs font-bold flex items-center gap-1.5 transition"
             >
-              <div className="w-8 h-8 rounded-full bg-emerald-500 text-white font-extrabold text-xs flex items-center justify-center shrink-0">
-                {currentUserName
-                  .split(" ")
-                  .map((n) => n[0])
-                  .join("")
-                  .slice(0, 2)
-                  .toUpperCase()}
-              </div>
-              <div className="hidden md:block">
-                <p className="text-xs font-extrabold text-navy-800 leading-tight">
-                  {currentUserName}
-                </p>
-                <p className="text-[11px] text-slate-500 leading-tight">
-                  {currentRole === "OWNER"
-                    ? "Owner"
-                    : currentRole === "CASHIER"
-                    ? "Kasir"
-                    : "Super Admin"}
-                </p>
-              </div>
-              <ChevronDown className="w-3.5 h-3.5 text-slate-400 hidden md:block" />
+              <LogOut className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Logout</span>
             </button>
           </div>
         </header>
@@ -1202,7 +1370,17 @@ export default function KelokraApp() {
                 setAccounts((prev) => prev.filter((a) => a.id !== accountId));
                 showToast("Akun berhasil dihapus oleh Super Admin.");
               }}
-              onLoginAsAccount={(acc) => handleSelectRole(acc.role, acc)}
+              onLoginAsAccount={(acc) => {
+                handleLoginSuccess({
+                  userId: acc.id,
+                  username: acc.username,
+                  name: acc.name,
+                  role: acc.role,
+                  accountId: acc.id,
+                  storeName: acc.storeName || storeSettings.storeName,
+                  loggedInAt: new Date().toISOString(),
+                });
+              }}
               onUpdateSettings={(next) => {
                 setStoreSettings(next);
                 showToast("Pengaturan & metode pembayaran berhasil disimpan!");
@@ -1246,7 +1424,6 @@ export default function KelokraApp() {
                 setShifts([]);
                 setAccounts([]);
                 setAuditLogs([]);
-                setActiveAccountId(null);
                 setStoreSettings(INITIAL_STORE_SETTINGS);
                 showToast("Seluruh data berhasil dikosongkan!");
               }}
@@ -1262,15 +1439,6 @@ export default function KelokraApp() {
           <span>{toastMessage}</span>
         </div>
       )}
-
-      {/* LANDING / LOGIN / ROLE SWITCHER MODAL */}
-      <LandingAuthModal
-        isOpen={showAuthModal}
-        currentRole={currentRole}
-        accounts={accounts}
-        onClose={() => setShowAuthModal(false)}
-        onSelectRole={handleSelectRole}
-      />
     </div>
   );
 }

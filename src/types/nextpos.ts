@@ -202,6 +202,16 @@ export interface AuditLogEntry {
   details: string;
 }
 
+export interface AuthSession {
+  userId: string;
+  username: string;
+  name: string;
+  role: UserRole;
+  accountId: string | null;
+  storeName: string;
+  loggedInAt: string;
+}
+
 export interface StoreSettings {
   storeName: string;
   businessType: string;
