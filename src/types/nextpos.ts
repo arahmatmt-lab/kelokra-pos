@@ -167,6 +167,8 @@ export interface CashShiftRecord {
   notes?: string;
 }
 
+export type OwnerAccountMode = "OWNER_PLUS_KASIR" | "OWNER_INCLUDE_KASIR";
+
 export interface ManagedAccount {
   id: string;
   name: string;
@@ -174,6 +176,8 @@ export interface ManagedAccount {
   password: string;
   email: string;
   role: "OWNER" | "CASHIER";
+  ownerMode?: OwnerAccountMode;
+  parentOwnerId?: string;
   storeName: string;
   durationMonths: number;
   createdAt: string; // ISO string
@@ -207,6 +211,7 @@ export interface AuthSession {
   username: string;
   name: string;
   role: UserRole;
+  ownerMode?: OwnerAccountMode;
   accountId: string | null;
   storeName: string;
   loggedInAt: string;

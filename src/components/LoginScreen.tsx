@@ -94,6 +94,7 @@ export function LoginScreen({
         username: matched.username,
         name: matched.name,
         role: matched.role,
+        ownerMode: matched.ownerMode,
         accountId: matched.id,
         storeName: matched.storeName || defaultStoreName,
         loggedInAt: new Date().toISOString(),

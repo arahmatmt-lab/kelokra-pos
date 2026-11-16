@@ -22,6 +22,7 @@ interface DashboardViewProps {
   userName: string;
   products: Product[];
   sales: SaleTransaction[];
+  canUsePos?: boolean;
   onNavigate: (menu: string) => void;
 }
 
@@ -29,6 +30,7 @@ export function DashboardView({
   userName,
   products,
   sales,
+  canUsePos = true,
   onNavigate,
 }: DashboardViewProps) {
   const [hoveredIndex, setHoveredIndex] = useState<number>(3);
@@ -123,13 +125,15 @@ export function DashboardView({
             Pantau penjualan, stok, dan performa toko Anda secara real-time dalam satu layar.
           </p>
           <div className="pt-2 flex flex-wrap items-center gap-3">
-            <button
-              onClick={() => onNavigate("pos")}
-              className="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-semibold text-sm shadow-sm transition flex items-center gap-2"
-            >
-              <span>Buka Kasir (POS)</span>
-              <ArrowRight className="w-4 h-4" />
-            </button>
+            {canUsePos && (
+              <button
+                onClick={() => onNavigate("pos")}
+                className="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-semibold text-sm shadow-sm transition flex items-center gap-2"
+              >
+                <span>Buka Kasir (POS)</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            )}
             <button
               onClick={() => onNavigate("products")}
               className="px-4 py-2.5 rounded-xl bg-white hover:bg-slate-50 text-navy-800 border border-slate-200 font-semibold text-sm transition"

@@ -66,6 +66,7 @@ import {
   getRemainingTimeInfo,
 } from "@/lib/format";
 import { DashboardView } from "@/components/views/DashboardView";
+import { SuperAdminDashboardView } from "@/components/views/SuperAdminDashboardView";
 import { PosView } from "@/components/views/PosView";
 import { ProductsInventoryView } from "@/components/views/ProductsInventoryView";
 import { ReportsFinanceView } from "@/components/views/ReportsFinanceView";
@@ -164,7 +165,7 @@ export default function KelokraApp() {
         const parsedSession = JSON.parse(savedSession) as AuthSession;
         if (parsedSession.role === "SUPER_ADMIN") {
           setAuthSession(parsedSession);
-          setActiveMenu("super-admin");
+          setActiveMenu("dashboard");
         } else if (parsedSession.accountId) {
           const matchedAcc = loadedAccounts.find(
             (a) => a.id === parsedSession.accountId
@@ -317,7 +318,7 @@ export default function KelokraApp() {
     ]);
 
     if (session.role === "SUPER_ADMIN") {
-      setActiveMenu("super-admin");
+      setActiveMenu("dashboard");
     } else if (session.role === "CASHIER") {
       setActiveMenu("pos");
     } else {
@@ -725,6 +726,12 @@ export default function KelokraApp() {
     ? getRemainingTimeInfo(activeAccount.expiresAt)
     : null;
 
+  const activeOwnerMode =
+    activeAccount?.ownerMode || authSession.ownerMode || "OWNER_PLUS_KASIR";
+  const canUsePos =
+    currentRole === "CASHIER" ||
+    (currentRole === "OWNER" && activeOwnerMode === "OWNER_INCLUDE_KASIR");
+
   // Strict RBAC Navigation Items
   const navItems = [
     {
@@ -733,12 +740,16 @@ export default function KelokraApp() {
       icon: LayoutDashboard,
       roles: ["OWNER", "CASHIER", "SUPER_ADMIN"],
     },
-    {
-      id: "pos",
-      label: "POS",
-      icon: ShoppingCart,
-      roles: ["OWNER", "CASHIER"],
-    },
+    ...(canUsePos
+      ? [
+          {
+            id: "pos",
+            label: "POS",
+            icon: ShoppingCart,
+            roles: ["OWNER", "CASHIER"],
+          },
+        ]
+      : []),
     {
       id: "products",
       label: "Produk",
@@ -795,7 +806,17 @@ export default function KelokraApp() {
     },
   ].filter((item) => item.roles.includes(currentRole));
 
-  const lowStockCount = products.filter((p) => p.stock <= p.minStock).length;
+  const lowStockCount =
+    currentRole === "SUPER_ADMIN"
+      ? 0
+      : products.filter((p) => p.stock <= p.minStock).length;
+  const expiringAccountsCount =
+    currentRole === "SUPER_ADMIN"
+      ? accounts.filter((a) => {
+          const t = getRemainingTimeInfo(a.expiresAt);
+          return !t.isExpired && t.isExpiringSoon;
+        }).length
+      : 0;
 
   return (
     <div className="min-h-screen flex bg-[#F8FAFC] text-[#0F2933]">
@@ -808,11 +829,7 @@ export default function KelokraApp() {
         <div className="p-5 space-y-6 overflow-y-auto">
           <div className="flex items-center justify-between gap-2">
             <div
-              onClick={() =>
-                setActiveMenu(
-                  currentRole === "SUPER_ADMIN" ? "super-admin" : "dashboard"
-                )
-              }
+              onClick={() => setActiveMenu("dashboard")}
               className="cursor-pointer select-none flex-1"
             >
               <div className="bg-white rounded-xl px-3 py-2 inline-flex items-center justify-center shadow-sm">
@@ -1061,7 +1078,7 @@ export default function KelokraApp() {
                 className="p-2 rounded-xl border border-slate-200/80 hover:bg-slate-50 text-slate-600 relative"
               >
                 <Bell className="w-4 h-4" />
-                {lowStockCount > 0 && (
+                {(lowStockCount > 0 || expiringAccountsCount > 0) && (
                   <span className="w-2 h-2 rounded-full bg-rose-500 absolute top-1.5 right-1.5" />
                 )}
               </button>
@@ -1079,7 +1096,18 @@ export default function KelokraApp() {
                       Tutup
                     </button>
                   </div>
-                  {lowStockCount > 0 ? (
+                  {currentRole === "SUPER_ADMIN" ? (
+                    expiringAccountsCount > 0 ? (
+                      <div className="p-2.5 rounded-xl bg-amber-50 text-amber-900">
+                        <b>Masa Aktif Segera Habis:</b> {expiringAccountsCount}{" "}
+                        akun tersisa ≤ 7 hari lagi.
+                      </div>
+                    ) : (
+                      <div className="p-2.5 rounded-xl bg-slate-50 text-slate-600">
+                        Semua akun Owner & Kasir dalam kondisi aman.
+                      </div>
+                    )
+                  ) : lowStockCount > 0 ? (
                     <div className="p-2.5 rounded-xl bg-amber-50 text-amber-900">
                       <b>Stok Menipis:</b> {lowStockCount} produk berada di
                       bawah batas stok minimum.
@@ -1180,16 +1208,24 @@ export default function KelokraApp() {
 
         {/* ACTIVE VIEW CONTAINER */}
         <main className="flex-1 p-4 sm:p-6 max-w-[1440px] w-full mx-auto">
-          {activeMenu === "dashboard" && (
-            <DashboardView
-              userName={currentUserName}
-              products={products}
-              sales={sales}
-              onNavigate={setActiveMenu}
-            />
-          )}
+          {activeMenu === "dashboard" &&
+            (currentRole === "SUPER_ADMIN" ? (
+              <SuperAdminDashboardView
+                userName={currentUserName}
+                accounts={accounts}
+                onNavigate={setActiveMenu}
+              />
+            ) : (
+              <DashboardView
+                userName={currentUserName}
+                products={products}
+                sales={sales}
+                canUsePos={canUsePos}
+                onNavigate={setActiveMenu}
+              />
+            ))}
 
-          {activeMenu === "pos" && (
+          {activeMenu === "pos" && canUsePos && (
             <PosView
               products={products}
               customers={customers}
@@ -1201,111 +1237,113 @@ export default function KelokraApp() {
             />
           )}
 
-          {(activeMenu === "products" ||
-            activeMenu === "inventory" ||
-            activeMenu === "purchases") && (
-            <ProductsInventoryView
-              mode={activeMenu}
-              products={products}
-              movements={movements}
-              suppliers={suppliers}
-              purchases={purchases}
-              returns={returns}
-              onSaveProduct={handleSaveProduct}
-              onDeleteProduct={handleDeleteProduct}
-              onPerformOpname={handlePerformOpname}
-              onAddSupplier={(sup) => {
-                setSuppliers((prev) => [sup, ...prev]);
-                showToast(`Supplier "${sup.name}" berhasil ditambahkan!`);
-              }}
-              onCreatePurchase={handleCreatePurchase}
-              onReceivePurchase={handleReceivePurchase}
-              onCreateReturn={handleCreateReturn}
-            />
-          )}
+          {currentRole !== "SUPER_ADMIN" &&
+            (activeMenu === "products" ||
+              activeMenu === "inventory" ||
+              activeMenu === "purchases") && (
+              <ProductsInventoryView
+                mode={activeMenu}
+                products={products}
+                movements={movements}
+                suppliers={suppliers}
+                purchases={purchases}
+                returns={returns}
+                onSaveProduct={handleSaveProduct}
+                onDeleteProduct={handleDeleteProduct}
+                onPerformOpname={handlePerformOpname}
+                onAddSupplier={(sup) => {
+                  setSuppliers((prev) => [sup, ...prev]);
+                  showToast(`Supplier "${sup.name}" berhasil ditambahkan!`);
+                }}
+                onCreatePurchase={handleCreatePurchase}
+                onReceivePurchase={handleReceivePurchase}
+                onCreateReturn={handleCreateReturn}
+              />
+            )}
 
-          {(activeMenu === "reports" ||
-            activeMenu === "finance" ||
-            activeMenu === "customers") && (
-            <ReportsFinanceView
-              mode={activeMenu}
-              sales={sales}
-              products={products}
-              customers={customers}
-              expenses={expenses}
-              returns={returns}
-              shifts={shifts}
-              onAddExpense={(exp) => {
-                setExpenses((prev) => [exp, ...prev]);
-                appendAudit(
-                  "EXPENSE_ADDED",
-                  "Keuangan",
-                  `Mencatat pengeluaran ${exp.description} sebesar ${formatIDR(
-                    exp.amount
-                  )}.`
-                );
-                showToast("Pengeluaran operasional berhasil dicatat!");
-              }}
-              onAddCustomer={(cust) => {
-                setCustomers((prev) => [cust, ...prev]);
-                showToast(`Pelanggan "${cust.name}" berhasil ditambahkan!`);
-              }}
-              onToggleShift={(cashAmount, notes) => {
-                const openShift = shifts.find((s) => s.status === "OPEN");
-                if (openShift) {
-                  const diff = cashAmount - openShift.expectedCash;
-                  setShifts((prev) =>
-                    prev.map((s) =>
-                      s.id === openShift.id
-                        ? {
-                            ...s,
-                            status: "CLOSED",
-                            closedAt: `${new Date().toLocaleDateString(
-                              "id-ID"
-                            )} ${formatShortTime()}`,
-                            closingCash: cashAmount,
-                            difference: diff,
-                            notes,
-                          }
-                        : s
-                    )
-                  );
+          {currentRole !== "SUPER_ADMIN" &&
+            (activeMenu === "reports" ||
+              activeMenu === "finance" ||
+              activeMenu === "customers") && (
+              <ReportsFinanceView
+                mode={activeMenu}
+                sales={sales}
+                products={products}
+                customers={customers}
+                expenses={expenses}
+                returns={returns}
+                shifts={shifts}
+                onAddExpense={(exp) => {
+                  setExpenses((prev) => [exp, ...prev]);
                   appendAudit(
-                    "SHIFT_CLOSED",
-                    "Cash Shift",
-                    `Menutup shift kasir dengan kas akhir ${formatIDR(
-                      cashAmount
-                    )} (Selisih: ${formatIDR(diff)}).`
-                  );
-                  showToast("Shift kasir berhasil ditutup!");
-                } else {
-                  setShifts((prev) => [
-                    {
-                      id: generateId("shift"),
-                      cashierName: currentUserName,
-                      openedAt: `${new Date().toLocaleDateString(
-                        "id-ID"
-                      )} ${formatShortTime()}`,
-                      openingCash: cashAmount,
-                      cashSales: 0,
-                      expectedCash: cashAmount,
-                      status: "OPEN",
-                      notes,
-                    },
-                    ...prev,
-                  ]);
-                  appendAudit(
-                    "SHIFT_OPENED",
-                    "Cash Shift",
-                    `Membuka shift baru dengan modal kas awal ${formatIDR(
-                      cashAmount
+                    "EXPENSE_ADDED",
+                    "Keuangan",
+                    `Mencatat pengeluaran ${exp.description} sebesar ${formatIDR(
+                      exp.amount
                     )}.`
                   );
-                  showToast("Shift kasir baru berhasil dibuka!");
-                }
-              }}
-            />
-          )}
+                  showToast("Pengeluaran operasional berhasil dicatat!");
+                }}
+                onAddCustomer={(cust) => {
+                  setCustomers((prev) => [cust, ...prev]);
+                  showToast(`Pelanggan "${cust.name}" berhasil ditambahkan!`);
+                }}
+                onToggleShift={(cashAmount, notes) => {
+                  const openShift = shifts.find((s) => s.status === "OPEN");
+                  if (openShift) {
+                    const diff = cashAmount - openShift.expectedCash;
+                    setShifts((prev) =>
+                      prev.map((s) =>
+                        s.id === openShift.id
+                          ? {
+                              ...s,
+                              status: "CLOSED",
+                              closedAt: `${new Date().toLocaleDateString(
+                                "id-ID"
+                              )} ${formatShortTime()}`,
+                              closingCash: cashAmount,
+                              difference: diff,
+                              notes,
+                            }
+                          : s
+                      )
+                    );
+                    appendAudit(
+                      "SHIFT_CLOSED",
+                      "Cash Shift",
+                      `Menutup shift kasir dengan kas akhir ${formatIDR(
+                        cashAmount
+                      )} (Selisih: ${formatIDR(diff)}).`
+                    );
+                    showToast("Shift kasir berhasil ditutup!");
+                  } else {
+                    setShifts((prev) => [
+                      {
+                        id: generateId("shift"),
+                        cashierName: currentUserName,
+                        openedAt: `${new Date().toLocaleDateString(
+                          "id-ID"
+                        )} ${formatShortTime()}`,
+                        openingCash: cashAmount,
+                        cashSales: 0,
+                        expectedCash: cashAmount,
+                        status: "OPEN",
+                        notes,
+                      },
+                      ...prev,
+                    ]);
+                    appendAudit(
+                      "SHIFT_OPENED",
+                      "Cash Shift",
+                      `Membuka shift baru dengan modal kas awal ${formatIDR(
+                        cashAmount
+                      )}.`
+                    );
+                    showToast("Shift kasir baru berhasil dibuka!");
+                  }
+                }}
+              />
+            )}
 
           {(activeMenu === "employees" ||
             activeMenu === "payment-methods" ||
@@ -1314,21 +1352,25 @@ export default function KelokraApp() {
             activeMenu === "super-admin") && (
             <SaasSettingsAdminView
               mode={activeMenu}
+              userRole={currentRole}
               accounts={accounts}
               storeSettings={storeSettings}
               auditLogs={auditLogs}
-              onCreateAccount={(acc) => {
-                setAccounts((prev) => [acc, ...prev]);
+              onNavigate={setActiveMenu}
+              onCreateAccountsBatch={(newAccounts) => {
+                setAccounts((prev) => [...newAccounts, ...prev]);
+                const summaryNames = newAccounts
+                  .map(
+                    (a) =>
+                      `${a.role === "OWNER" ? "Owner" : "Kasir"} (${a.name})`
+                  )
+                  .join(" + ");
                 appendAudit(
-                  "ACCOUNT_CREATED",
+                  "ACCOUNTS_CREATED",
                   "Super Admin",
-                  `Super Admin membuat akun ${acc.role} (${acc.name} / @${acc.username}) dengan durasi ${acc.durationMonths} bulan.`
+                  `Super Admin membuat akun: ${summaryNames} dengan durasi ${newAccounts[0]?.durationMonths} bulan.`
                 );
-                showToast(
-                  `Akun ${acc.role === "OWNER" ? "Owner" : "Kasir"} "${
-                    acc.name
-                  }" aktif selama ${acc.durationMonths} bulan!`
-                );
+                showToast(`Berhasil membuat akun: ${summaryNames}!`);
               }}
               onExtendAccount={(accountId, addMonths) => {
                 setAccounts((prev) =>
@@ -1369,17 +1411,6 @@ export default function KelokraApp() {
               onDeleteAccount={(accountId) => {
                 setAccounts((prev) => prev.filter((a) => a.id !== accountId));
                 showToast("Akun berhasil dihapus oleh Super Admin.");
-              }}
-              onLoginAsAccount={(acc) => {
-                handleLoginSuccess({
-                  userId: acc.id,
-                  username: acc.username,
-                  name: acc.name,
-                  role: acc.role,
-                  accountId: acc.id,
-                  storeName: acc.storeName || storeSettings.storeName,
-                  loggedInAt: new Date().toISOString(),
-                });
               }}
               onUpdateSettings={(next) => {
                 setStoreSettings(next);
