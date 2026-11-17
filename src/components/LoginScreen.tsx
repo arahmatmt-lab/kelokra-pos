@@ -123,19 +123,17 @@ export function LoginScreen({
         loggedInAt: new Date().toISOString(),
       };
 
-      try {
-        await fetch("/api/auth/login", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            username: sessionToSet.username,
-            role: sessionToSet.role,
-            accountId: sessionToSet.accountId,
-          }),
-        });
-      } catch {
-        // Offline PWA fallback
-      }
+      // Sync HttpOnly cookie in background so UI transition is instantaneous (works offline too)
+      fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        keepalive: true,
+        body: JSON.stringify({
+          username: sessionToSet.username,
+          role: sessionToSet.role,
+          accountId: sessionToSet.accountId,
+        }),
+      }).catch(() => {});
 
       setIsSubmitting(false);
       setFailedCount(0);
@@ -145,15 +143,19 @@ export function LoginScreen({
 
     // 2. Otherwise verify Super Admin strictly on the server (no hardcoded client password)
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify({
           username: uname,
           password: pwd,
           role: "SUPER_ADMIN",
         }),
       });
+      clearTimeout(timeoutId);
 
       if (!res.ok) {
         setIsSubmitting(false);

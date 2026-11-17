@@ -92,12 +92,13 @@ function resolveTenantId(
   const matchedCashier = allAccounts.find((a) => a.id === session.accountId);
   if (matchedCashier?.parentOwnerId) return matchedCashier.parentOwnerId;
   if (matchedCashier?.storeName) {
-    const ownerSameStore = allAccounts.find(
+    const ownersSameStore = allAccounts.filter(
       (a) =>
         a.role === "OWNER" &&
         a.storeName.toLowerCase() === matchedCashier.storeName.toLowerCase()
     );
-    if (ownerSameStore) return ownerSameStore.id;
+    // Only fall back to storeName match if unique; otherwise keep isolated by cashier ID
+    if (ownersSameStore.length === 1) return ownersSameStore[0].id;
   }
   return session.accountId || DEFAULT_TENANT_ID;
 }
@@ -157,6 +158,21 @@ export default function KelokraApp() {
     }, 3500);
   };
 
+  const filterForTenant = <T extends { tenantId?: string }>(
+    list: unknown,
+    tenantId: string
+  ): T[] => {
+    if (!Array.isArray(list)) return [];
+    return (list as T[])
+      .filter(
+        (item) =>
+          !item.tenantId ||
+          item.tenantId === DEFAULT_TENANT_ID ||
+          item.tenantId === tenantId
+      )
+      .map((item) => ({ ...item, tenantId }));
+  };
+
   const loadAndApplyTenantStore = (
     tenantId: string,
     storeNameHint?: string,
@@ -183,9 +199,9 @@ export default function KelokraApp() {
       const tenantRaw = localStorage.getItem(`${TENANT_STORE_PREFIX}${tenantId}`);
       if (tenantRaw) {
         const parsed = JSON.parse(tenantRaw);
-        setProducts(Array.isArray(parsed.products) ? parsed.products : []);
-        setSales(Array.isArray(parsed.sales) ? parsed.sales : []);
-        setMovements(Array.isArray(parsed.movements) ? parsed.movements : []);
+        setProducts(filterForTenant<Product>(parsed.products, tenantId));
+        setSales(filterForTenant<SaleTransaction>(parsed.sales, tenantId));
+        setMovements(filterForTenant<StockMovement>(parsed.movements, tenantId));
         setSuppliers(Array.isArray(parsed.suppliers) ? parsed.suppliers : []);
         setPurchases(Array.isArray(parsed.purchases) ? parsed.purchases : []);
         setReturns(Array.isArray(parsed.returns) ? parsed.returns : []);
@@ -205,9 +221,9 @@ export default function KelokraApp() {
 
       if (legacyFallback) {
         const lf = legacyFallback as Record<string, unknown>;
-        setProducts(Array.isArray(lf.products) ? lf.products : []);
-        setSales(Array.isArray(lf.sales) ? lf.sales : []);
-        setMovements(Array.isArray(lf.movements) ? lf.movements : []);
+        setProducts(filterForTenant<Product>(lf.products, tenantId));
+        setSales(filterForTenant<SaleTransaction>(lf.sales, tenantId));
+        setMovements(filterForTenant<StockMovement>(lf.movements, tenantId));
         setSuppliers(Array.isArray(lf.suppliers) ? lf.suppliers : []);
         setPurchases(Array.isArray(lf.purchases) ? lf.purchases : []);
         setReturns(Array.isArray(lf.returns) ? lf.returns : []);
@@ -305,7 +321,36 @@ export default function KelokraApp() {
             (Array.isArray(parsed.sales) && parsed.sales.length > 0) ||
             (Array.isArray(parsed.customers) && parsed.customers.length > 0)
           ) {
-            legacyOperational = parsed;
+            const owners = loadedAccounts.filter((a) => a.role === "OWNER");
+            if (
+              owners.length === 1 &&
+              !localStorage.getItem(`${TENANT_STORE_PREFIX}${owners[0].id}`)
+            ) {
+              legacyOperational = parsed;
+              localStorage.setItem(
+                `${TENANT_STORE_PREFIX}${owners[0].id}`,
+                JSON.stringify({
+                  products: filterForTenant(parsed.products, owners[0].id),
+                  sales: filterForTenant(parsed.sales, owners[0].id),
+                  movements: filterForTenant(parsed.movements, owners[0].id),
+                  suppliers: Array.isArray(parsed.suppliers) ? parsed.suppliers : [],
+                  purchases: Array.isArray(parsed.purchases) ? parsed.purchases : [],
+                  returns: Array.isArray(parsed.returns) ? parsed.returns : [],
+                  customers: Array.isArray(parsed.customers) ? parsed.customers : [],
+                  expenses: Array.isArray(parsed.expenses) ? parsed.expenses : [],
+                  shifts: Array.isArray(parsed.shifts) ? parsed.shifts : [],
+                  storeSettings: parsed.storeSettings || INITIAL_STORE_SETTINGS,
+                })
+              );
+            }
+            // Strip legacy operational payload from global key immediately so stores remain isolated
+            localStorage.setItem(
+              STORAGE_KEY,
+              JSON.stringify({
+                accounts: loadedAccounts,
+                auditLogs: loadedAuditLogs,
+              })
+            );
           }
         }
 
@@ -330,12 +375,10 @@ export default function KelokraApp() {
               !getRemainingTimeInfo(matchedAcc.expiresAt).isExpired
             ) {
               const tid = resolveTenantId(parsedSession, loadedAccounts);
-              const onlyOneStore =
-                loadedAccounts.filter((a) => a.role === "OWNER").length <= 1;
               loadAndApplyTenantStore(
                 tid,
                 parsedSession.storeName,
-                onlyOneStore ? legacyOperational : null
+                legacyOperational
               );
               setAuthSession(parsedSession);
               setActiveMenu(
@@ -516,21 +559,9 @@ export default function KelokraApp() {
     showToast(`Selamat datang, ${session.name}!`);
   };
 
-  // Logout Handler
-  const handleLogout = async () => {
-    if (authSession) {
-      appendAudit(
-        "USER_LOGOUT",
-        "Auth",
-        `Akun @${authSession.username} (${authSession.role}) keluar dari sistem.`
-      );
-    }
-
-    try {
-      await fetch("/api/auth/logout", { method: "POST" });
-    } catch {
-      // Ignore network error if offline
-    }
+  // Logout Handler — Instant UI reset + non-blocking server cookie clear
+  const handleLogout = () => {
+    const logoutActor = authSession;
 
     try {
       localStorage.removeItem(SESSION_STORAGE_KEY);
@@ -550,10 +581,35 @@ export default function KelokraApp() {
     setExpenses(INITIAL_EXPENSES);
     setShifts(INITIAL_SHIFTS);
     setStoreSettings(INITIAL_STORE_SETTINGS);
-    setAuthSession(null);
     setShowProfileMenu(false);
     setMobileMenuOpen(false);
+    setAuthSession(null);
     setLoginNotice("Anda telah berhasil logout dari sistem.");
+
+    if (logoutActor) {
+      setAuditLogs((prev) => [
+        {
+          id: generateId("aud"),
+          timestamp: `${new Date().toLocaleDateString("id-ID")} ${formatShortTime()}`,
+          actor: logoutActor.name,
+          role:
+            logoutActor.role === "OWNER"
+              ? "Owner"
+              : logoutActor.role === "CASHIER"
+              ? "Kasir"
+              : "Super Admin",
+          action: "USER_LOGOUT",
+          module: "Auth",
+          details: `Akun @${logoutActor.username} (${logoutActor.role}) keluar dari sistem.`,
+        },
+        ...prev,
+      ]);
+    }
+
+    // Clear HttpOnly session cookie in background without freezing the button
+    fetch("/api/auth/logout", { method: "POST", keepalive: true }).catch(
+      () => {}
+    );
   };
 
   // Handler 1: Complete POS Sale
@@ -577,7 +633,7 @@ export default function KelokraApp() {
       const balanceAfter = Math.max(0, (prod?.stock || 0) - item.quantity);
       return {
         id: generateId("mov"),
-        tenantId: DEFAULT_TENANT_ID,
+        tenantId: activeTenantId || DEFAULT_TENANT_ID,
         productId: item.productId,
         productName: item.productName,
         sku: item.sku,
@@ -641,7 +697,7 @@ export default function KelokraApp() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          tenantId: DEFAULT_TENANT_ID,
+          tenantId: activeTenantId || DEFAULT_TENANT_ID,
           queuedTransactions: unsyncedSales.map((u) => ({
             id: u.id,
             idempotencyKey: u.idempotencyKey,
@@ -668,18 +724,23 @@ export default function KelokraApp() {
 
   // Handler 3: Save / Delete Product
   const handleSaveProduct = (product: Product, isNew: boolean) => {
+    const resolvedTid = activeTenantId || DEFAULT_TENANT_ID;
+    const scopedProduct: Product = {
+      ...product,
+      tenantId: resolvedTid,
+    };
     if (isNew) {
-      setProducts((prev) => [product, ...prev]);
+      setProducts((prev) => [scopedProduct, ...prev]);
       setMovements((prev) => [
         {
           id: generateId("mov"),
-          tenantId: DEFAULT_TENANT_ID,
-          productId: product.id,
-          productName: product.name,
-          sku: product.sku,
+          tenantId: resolvedTid,
+          productId: scopedProduct.id,
+          productName: scopedProduct.name,
+          sku: scopedProduct.sku,
           type: "IN",
-          quantity: product.stock,
-          balanceAfter: product.stock,
+          quantity: scopedProduct.stock,
+          balanceAfter: scopedProduct.stock,
           reference: "INIT-STOCK",
           reason: "Stok Awal Produk Baru",
           actor: currentUserName,
@@ -690,19 +751,19 @@ export default function KelokraApp() {
       appendAudit(
         "PRODUCT_CREATED",
         "Produk",
-        `Menambahkan produk baru ${product.name} (${product.sku}) dengan stok awal ${product.stock}.`
+        `Menambahkan produk baru ${scopedProduct.name} (${scopedProduct.sku}) dengan stok awal ${scopedProduct.stock}.`
       );
-      showToast(`Produk "${product.name}" berhasil ditambahkan!`);
+      showToast(`Produk "${scopedProduct.name}" berhasil ditambahkan!`);
     } else {
       setProducts((prev) =>
-        prev.map((p) => (p.id === product.id ? product : p))
+        prev.map((p) => (p.id === scopedProduct.id ? scopedProduct : p))
       );
       appendAudit(
         "PRODUCT_UPDATED",
         "Produk",
-        `Memperbarui informasi produk ${product.name} (${product.sku}).`
+        `Memperbarui informasi produk ${scopedProduct.name} (${scopedProduct.sku}).`
       );
-      showToast(`Produk "${product.name}" berhasil diperbarui!`);
+      showToast(`Produk "${scopedProduct.name}" berhasil diperbarui!`);
     }
   };
 
@@ -736,7 +797,7 @@ export default function KelokraApp() {
     setMovements((prev) => [
       {
         id: generateId("mov"),
-        tenantId: DEFAULT_TENANT_ID,
+        tenantId: activeTenantId || DEFAULT_TENANT_ID,
         productId: target.id,
         productName: target.name,
         sku: target.sku,
@@ -806,7 +867,7 @@ export default function KelokraApp() {
       const prod = products.find((p) => p.id === item.productId);
       return {
         id: generateId("mov"),
-        tenantId: DEFAULT_TENANT_ID,
+        tenantId: activeTenantId || DEFAULT_TENANT_ID,
         productId: item.productId,
         productName: item.productName,
         sku: prod?.sku || "SKU",
@@ -842,7 +903,7 @@ export default function KelokraApp() {
         setMovements((prev) => [
           {
             id: generateId("mov"),
-            tenantId: DEFAULT_TENANT_ID,
+            tenantId: activeTenantId || DEFAULT_TENANT_ID,
             productId: prod.id,
             productName: prod.name,
             sku: prod.sku,
@@ -864,7 +925,7 @@ export default function KelokraApp() {
         setMovements((prev) => [
           {
             id: generateId("mov"),
-            tenantId: DEFAULT_TENANT_ID,
+            tenantId: activeTenantId || DEFAULT_TENANT_ID,
             productId: prod.id,
             productName: prod.name,
             sku: prod.sku,
@@ -931,6 +992,17 @@ export default function KelokraApp() {
   const canUsePos =
     currentRole === "CASHIER" ||
     (currentRole === "OWNER" && activeOwnerMode === "OWNER_INCLUDE_KASIR");
+
+  const currentTenantId = activeTenantId || DEFAULT_TENANT_ID;
+  const scopedProducts = products.filter(
+    (p) => !p.tenantId || p.tenantId === currentTenantId
+  );
+  const scopedSales = sales.filter(
+    (s) => !s.tenantId || s.tenantId === currentTenantId
+  );
+  const scopedMovements = movements.filter(
+    (m) => !m.tenantId || m.tenantId === currentTenantId
+  );
 
   // Owner 1-week expiry warning (<= 7 hari lagi)
   const ownerExpiringWithinWeek =
@@ -1010,10 +1082,26 @@ export default function KelokraApp() {
         };
       }
 
-      setProducts(parsed.products as Product[]);
-      setSales(parsed.sales as SaleTransaction[]);
+      const restoreTid = activeTenantId || DEFAULT_TENANT_ID;
+      setProducts(
+        (parsed.products as Product[]).map((p) => ({
+          ...p,
+          tenantId: restoreTid,
+        }))
+      );
+      setSales(
+        (parsed.sales as SaleTransaction[]).map((s) => ({
+          ...s,
+          tenantId: restoreTid,
+        }))
+      );
       if (Array.isArray(parsed.movements)) {
-        setMovements(parsed.movements as StockMovement[]);
+        setMovements(
+          (parsed.movements as StockMovement[]).map((m) => ({
+            ...m,
+            tenantId: restoreTid,
+          }))
+        );
       }
       if (Array.isArray(parsed.suppliers)) {
         setSuppliers(parsed.suppliers as Supplier[]);
@@ -1751,9 +1839,10 @@ export default function KelokraApp() {
               />
             ) : (
               <DashboardView
+                key={`dash-${currentTenantId}`}
                 userName={currentUserName}
-                products={products}
-                sales={sales}
+                products={scopedProducts}
+                sales={scopedSales}
                 canUsePos={canUsePos}
                 onNavigate={setActiveMenu}
               />
@@ -1761,7 +1850,9 @@ export default function KelokraApp() {
 
           {activeMenu === "pos" && canUsePos && (
             <PosView
-              products={products}
+              key={`pos-${currentTenantId}`}
+              tenantId={currentTenantId}
+              products={scopedProducts}
               customers={customers}
               storeSettings={storeSettings}
               isOnline={isOnline}
@@ -1776,9 +1867,11 @@ export default function KelokraApp() {
               activeMenu === "inventory" ||
               activeMenu === "purchases") && (
               <ProductsInventoryView
+                key={`prod-${currentTenantId}`}
                 mode={activeMenu}
-                products={products}
-                movements={movements}
+                tenantId={currentTenantId}
+                products={scopedProducts}
+                movements={scopedMovements}
                 suppliers={suppliers}
                 purchases={purchases}
                 returns={returns}
@@ -1800,9 +1893,10 @@ export default function KelokraApp() {
               activeMenu === "finance" ||
               activeMenu === "customers") && (
               <ReportsFinanceView
+                key={`rep-${currentTenantId}`}
                 mode={activeMenu}
-                sales={sales}
-                products={products}
+                sales={scopedSales}
+                products={scopedProducts}
                 customers={customers}
                 expenses={expenses}
                 returns={returns}

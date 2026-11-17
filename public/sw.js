@@ -1,4 +1,4 @@
-const CACHE_NAME = "kelokra-pwa-v1.2";
+const CACHE_NAME = "kelokra-pwa-v1.3";
 const ASSETS_TO_CACHE = ["/", "/manifest.json", "/icon.svg", "/kelokra-logo.png"];
 
 self.addEventListener("install", (event) => {

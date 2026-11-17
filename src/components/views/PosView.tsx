@@ -38,6 +38,7 @@ import { clampNonNegative, escapeHtml } from "@/lib/security";
 import { ProductVisual } from "@/components/ProductVisual";
 
 interface PosViewProps {
+  tenantId?: string;
   products: Product[];
   customers: Customer[];
   storeSettings: StoreSettings;
@@ -48,6 +49,7 @@ interface PosViewProps {
 }
 
 export function PosView({
+  tenantId = "tenant-kelokra-001",
   products,
   customers,
   storeSettings,
@@ -316,7 +318,7 @@ export function PosView({
 
     const newSale: SaleTransaction = {
       id: generateId("sale"),
-      tenantId: "tenant-kelokra-001",
+      tenantId,
       invoiceNumber: invoiceNum,
       idempotencyKey,
       createdAt: new Date().toISOString(),

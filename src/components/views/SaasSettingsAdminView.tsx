@@ -1376,15 +1376,15 @@ export function SaasSettingsAdminView({
     setAccError(null);
     setAccRole("OWNER");
     setAccOwnerMode("OWNER_PLUS_KASIR");
-    setAccStoreName(storeSettings.storeName);
+    setAccStoreName("");
     setAccName("");
     setAccUsername("");
     setAccPassword("");
     setAccEmail("");
     setAccDurationMonths(12);
     setCashierDrafts([{ name: "", username: "", password: "" }]);
-    const firstOwner = accounts.find((a) => a.role === "OWNER");
-    setSelectedParentOwnerId(firstOwner?.id || "");
+    const owners = accounts.filter((a) => a.role === "OWNER");
+    setSelectedParentOwnerId(owners.length === 1 ? owners[0].id : "");
     setShowAccountModal(true);
   };
 
@@ -1518,9 +1518,16 @@ export function SaasSettingsAdminView({
         setCreatedCredentialsOnce(onceSummary);
         setCopiedBatchCreds(false);
       } else {
-        const parentOwner = accounts.find(
-          (a) => a.role === "OWNER" && a.id === selectedParentOwnerId
+        const ownersList = accounts.filter((a) => a.role === "OWNER");
+        const parentOwner = ownersList.find(
+          (a) => a.id === selectedParentOwnerId
         );
+        if (ownersList.length > 0 && !parentOwner) {
+          setAccError(
+            "Pilih Toko / Owner pemilik kasir ini terlebih dahulu agar data toko tidak tertukar."
+          );
+          return;
+        }
         const cHash = await hashPasswordWithSalt(accPassword);
         const newCashier: ManagedAccount = {
           id: generateId("acc"),
@@ -1944,6 +1951,7 @@ export function SaasSettingsAdminView({
                       Hubungkan ke Toko / Owner
                     </label>
                     <select
+                      required
                       value={selectedParentOwnerId}
                       onChange={(e) => {
                         setSelectedParentOwnerId(e.target.value);
@@ -1951,14 +1959,16 @@ export function SaasSettingsAdminView({
                           (a) => a.id === e.target.value
                         );
                         if (found) setAccStoreName(found.storeName);
+                        else setAccStoreName("");
                       }}
                       className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-xs sm:text-sm"
                     >
+                      <option value="">-- Pilih Toko / Owner --</option>
                       {accounts
                         .filter((a) => a.role === "OWNER")
                         .map((o) => (
                           <option key={o.id} value={o.id}>
-                            {o.storeName} (Owner: {o.name})
+                            {o.storeName} (Owner: {o.name} • @{o.username})
                           </option>
                         ))}
                     </select>
@@ -1987,11 +1997,29 @@ export function SaasSettingsAdminView({
                   </label>
                   <input
                     type="text"
-                    required
-                    value={accStoreName}
+                    required={accRole === "OWNER"}
+                    readOnly={
+                      accRole === "CASHIER" &&
+                      accounts.some((a) => a.role === "OWNER")
+                    }
+                    value={
+                      accRole === "CASHIER" && selectedParentOwnerId
+                        ? accounts.find((a) => a.id === selectedParentOwnerId)
+                            ?.storeName || accStoreName
+                        : accStoreName
+                    }
                     onChange={(e) => setAccStoreName(e.target.value)}
-                    placeholder="Contoh: Toko Utama"
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200"
+                    placeholder={
+                      accRole === "CASHIER"
+                        ? "Otomatis mengikuti Owner terpilih"
+                        : "Contoh: Toko Kopi A"
+                    }
+                    className={`w-full px-3.5 py-2.5 rounded-xl border border-slate-200 ${
+                      accRole === "CASHIER" &&
+                      accounts.some((a) => a.role === "OWNER")
+                        ? "bg-slate-50 text-slate-500 cursor-not-allowed"
+                        : ""
+                    }`}
                   />
                 </div>
               </div>

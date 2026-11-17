@@ -31,6 +31,7 @@ import { ProductVisual } from "@/components/ProductVisual";
 
 interface ProductsInventoryViewProps {
   mode: "products" | "inventory" | "purchases";
+  tenantId?: string;
   products: Product[];
   movements: StockMovement[];
   suppliers: Supplier[];
@@ -47,6 +48,7 @@ interface ProductsInventoryViewProps {
 
 export function ProductsInventoryView({
   mode,
+  tenantId = "tenant-kelokra-001",
   products,
   movements,
   suppliers,
@@ -174,7 +176,7 @@ export function ProductsInventoryView({
 
     const newProd: Product = {
       id: editingProduct ? editingProduct.id : generateId("prod"),
-      tenantId: "tenant-kelokra-001",
+      tenantId,
       name: prodName.trim(),
       sku: prodSku.trim().toUpperCase(),
       barcode: prodBarcode.trim(),
