@@ -117,8 +117,14 @@ export async function POST(req: NextRequest) {
       exp,
     });
 
-    const gmailUser = process.env.GMAIL_USER?.trim();
-    const gmailAppPassword = process.env.GMAIL_APP_PASSWORD?.trim();
+    const gmailUser = (
+      process.env.GMAIL_USER || process.env.GMAIL_SMTP_USER
+    )?.trim();
+    const gmailAppPassword = (
+      process.env.GMAIL_APP_PASSWORD || process.env.GMAIL_SMTP_APP_PASSWORD
+    )
+      ?.replace(/\s+/g, "")
+      .trim();
     let deliveryMode: "GMAIL_SMTP" | "SIMULATION" = "SIMULATION";
 
     if (gmailUser && gmailAppPassword) {
