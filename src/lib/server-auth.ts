@@ -70,7 +70,7 @@ export function verifySuperAdminCredentials(
   const expectedUser = (process.env.SUPER_ADMIN_USERNAME || "superadmin")
     .trim()
     .toLowerCase();
-  const expectedPass = process.env.SUPER_ADMIN_PASSWORD || "admin123";
+  const expectedPass = process.env.SUPER_ADMIN_PASSWORD || "234575";
 
   const userMatch = username.trim().toLowerCase() === expectedUser;
   const a = crypto.createHash("sha256").update(password).digest();
