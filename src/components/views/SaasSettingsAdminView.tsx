@@ -22,6 +22,9 @@ import {
   Banknote,
   Clock,
   Eye,
+  EyeOff,
+  KeyRound,
+  Lock,
   UserPlus,
   Info,
   AlertTriangle,
@@ -48,6 +51,7 @@ import {
   clampPositiveInt,
   copyTextSafe,
   hashPasswordWithSalt,
+  verifyPasswordWithSalt,
 } from "@/lib/security";
 import { StoreAccountDetailModal } from "@/components/StoreAccountDetailModal";
 
@@ -150,6 +154,94 @@ export function SaasSettingsAdminView({
 
   // Selected Owner for Eye Icon Detail Modal
   const [detailOwner, setDetailOwner] = useState<ManagedAccount | null>(null);
+
+  // Owner Change Kasir Password Modal (2-step: verify old password -> enter new & repeat new)
+  const [changePwdTarget, setChangePwdTarget] = useState<ManagedAccount | null>(
+    null
+  );
+  const [pwdStep, setPwdStep] = useState<1 | 2>(1);
+  const [oldPasswordInput, setOldPasswordInput] = useState("");
+  const [newPasswordInput, setNewPasswordInput] = useState("");
+  const [repeatNewPasswordInput, setRepeatNewPasswordInput] = useState("");
+  const [showOldPwd, setShowOldPwd] = useState(false);
+  const [showNewPwd, setShowNewPwd] = useState(false);
+  const [showRepeatPwd, setShowRepeatPwd] = useState(false);
+  const [pwdError, setPwdError] = useState<string | null>(null);
+  const [isUpdatingPwd, setIsUpdatingPwd] = useState(false);
+
+  const openCashierChangePasswordModal = (acc: ManagedAccount) => {
+    setChangePwdTarget(acc);
+    setPwdStep(1);
+    setOldPasswordInput("");
+    setNewPasswordInput("");
+    setRepeatNewPasswordInput("");
+    setShowOldPwd(false);
+    setShowNewPwd(false);
+    setShowRepeatPwd(false);
+    setPwdError(null);
+  };
+
+  const handleVerifyOldCashierPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!changePwdTarget) return;
+    setPwdError(null);
+
+    if (!oldPasswordInput) {
+      setPwdError("Masukkan kata sandi lama kasir terlebih dahulu.");
+      return;
+    }
+
+    let matched = false;
+    if (changePwdTarget.passwordHash && changePwdTarget.passwordSalt) {
+      matched = await verifyPasswordWithSalt(
+        oldPasswordInput,
+        changePwdTarget.passwordHash,
+        changePwdTarget.passwordSalt
+      );
+    } else if (changePwdTarget.password) {
+      matched = changePwdTarget.password === oldPasswordInput;
+    }
+
+    if (!matched) {
+      setPwdError("Kata sandi lama tidak benar. Periksa kembali.");
+      return;
+    }
+
+    setPwdStep(2);
+    setNewPasswordInput("");
+    setRepeatNewPasswordInput("");
+  };
+
+  const handleSaveNewCashierPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!changePwdTarget) return;
+    setPwdError(null);
+
+    if (newPasswordInput.trim().length < 6) {
+      setPwdError("Kata sandi baru minimal 6 karakter.");
+      return;
+    }
+    if (newPasswordInput !== repeatNewPasswordInput) {
+      setPwdError("Pengulangan kata sandi baru tidak cocok.");
+      return;
+    }
+
+    setIsUpdatingPwd(true);
+    try {
+      const { passwordHash, passwordSalt } = await hashPasswordWithSalt(
+        newPasswordInput
+      );
+      if (onResetAccountPassword) {
+        onResetAccountPassword(changePwdTarget.id, passwordHash, passwordSalt);
+      }
+      setChangePwdTarget(null);
+      setOldPasswordInput("");
+      setNewPasswordInput("");
+      setRepeatNewPasswordInput("");
+    } finally {
+      setIsUpdatingPwd(false);
+    }
+  };
 
   // Handle QRIS image upload to Base64 Data URL (SVG blocked to prevent XSS)
   const handleQrisFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -707,6 +799,9 @@ export function SaasSettingsAdminView({
                     <th className="py-3.5 px-4">Status</th>
                     <th className="py-3.5 px-4">Sisa Waktu Aktif</th>
                     <th className="py-3.5 px-4">Berlaku Hingga</th>
+                    {userRole === "OWNER" && (
+                      <th className="py-3.5 px-4 text-right">Aksi</th>
+                    )}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-sm">
@@ -769,6 +864,24 @@ export function SaasSettingsAdminView({
                         <td className="py-3.5 px-4 text-xs text-slate-600">
                           {formatDateOnly(acc.expiresAt)}
                         </td>
+                        {userRole === "OWNER" && (
+                          <td className="py-3.5 px-4 text-right">
+                            {acc.role === "CASHIER" ? (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  openCashierChangePasswordModal(acc)
+                                }
+                                className="px-3 py-1.5 rounded-xl border border-emerald-500 text-emerald-700 hover:bg-emerald-50 text-xs font-bold inline-flex items-center gap-1.5 transition"
+                              >
+                                <KeyRound className="w-3.5 h-3.5" />
+                                <span>Ubah Kata Sandi</span>
+                              </button>
+                            ) : (
+                              <span className="text-xs text-slate-400">-</span>
+                            )}
+                          </td>
+                        )}
                       </tr>
                     );
                   })}
@@ -844,6 +957,195 @@ export function SaasSettingsAdminView({
             </table>
           </div>
         </div>
+
+        {/* Modal Ubah Kata Sandi Kasir (Khusus Role Owner) */}
+        {changePwdTarget && userRole === "OWNER" && (
+          <div className="fixed inset-0 z-50 bg-navy-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <div>
+                  <h3 className="text-base sm:text-lg font-extrabold text-navy-800 flex items-center gap-2">
+                    <KeyRound className="w-5 h-5 text-emerald-600" />
+                    <span>Ubah Kata Sandi Kasir</span>
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Akun Kasir: <b>{changePwdTarget.name}</b> (@
+                    {changePwdTarget.username})
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setChangePwdTarget(null)}
+                  aria-label="Tutup Modal"
+                  className="p-1 rounded-lg text-slate-400 hover:text-slate-600"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {pwdStep === 1 ? (
+                <form
+                  onSubmit={handleVerifyOldCashierPassword}
+                  className="space-y-4 text-sm"
+                >
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80 text-xs text-slate-600 flex items-start gap-2">
+                    <Lock className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                    <span>
+                      Masukkan <b>kata sandi lama</b> kasir terlebih dahulu untuk melanjutkan ke pembuatan kata sandi baru.
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      Kata Sandi Lama
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={showOldPwd ? "text" : "password"}
+                        required
+                        autoFocus
+                        value={oldPasswordInput}
+                        onChange={(e) => setOldPasswordInput(e.target.value)}
+                        placeholder="Masukkan kata sandi lama..."
+                        className="w-full px-3.5 py-2.5 pr-10 rounded-xl border border-slate-200 focus:outline-none focus:border-emerald-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowOldPwd((v) => !v)}
+                        aria-label="Tampilkan Kata Sandi Lama"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-navy-800"
+                      >
+                        {showOldPwd ? (
+                          <EyeOff className="w-4 h-4" />
+                        ) : (
+                          <Eye className="w-4 h-4" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  {pwdError && (
+                    <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs font-bold text-rose-600">
+                      {pwdError}
+                    </div>
+                  )}
+
+                  <div className="flex gap-3 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setChangePwdTarget(null)}
+                      className="flex-1 py-2.5 rounded-xl border border-slate-200 font-bold text-slate-600 text-xs"
+                    >
+                      Batal
+                    </button>
+                    <button
+                      type="submit"
+                      className="flex-1 py-2.5 rounded-xl bg-navy-800 hover:bg-emerald-600 text-white font-bold text-xs transition"
+                    >
+                      Verifikasi Kata Sandi Lama
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <form
+                  onSubmit={handleSaveNewCashierPassword}
+                  className="space-y-4 text-sm"
+                >
+                  <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs font-semibold text-emerald-800 flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>
+                      Kata sandi lama benar. Silakan masukkan kata sandi baru.
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      Kata Sandi Baru
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={showNewPwd ? "text" : "password"}
+                        required
+                        autoFocus
+                        value={newPasswordInput}
+                        onChange={(e) => setNewPasswordInput(e.target.value)}
+                        placeholder="Minimal 6 karakter"
+                        className="w-full px-3.5 py-2.5 pr-10 rounded-xl border border-slate-200 focus:outline-none focus:border-emerald-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowNewPwd((v) => !v)}
+                        aria-label="Tampilkan Kata Sandi Baru"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-navy-800"
+                      >
+                        {showNewPwd ? (
+                          <EyeOff className="w-4 h-4" />
+                        ) : (
+                          <Eye className="w-4 h-4" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      Ulangi Kata Sandi Baru
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={showRepeatPwd ? "text" : "password"}
+                        required
+                        value={repeatNewPasswordInput}
+                        onChange={(e) =>
+                          setRepeatNewPasswordInput(e.target.value)
+                        }
+                        placeholder="Ketik ulang kata sandi baru..."
+                        className="w-full px-3.5 py-2.5 pr-10 rounded-xl border border-slate-200 focus:outline-none focus:border-emerald-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowRepeatPwd((v) => !v)}
+                        aria-label="Tampilkan Ulangi Kata Sandi Baru"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-navy-800"
+                      >
+                        {showRepeatPwd ? (
+                          <EyeOff className="w-4 h-4" />
+                        ) : (
+                          <Eye className="w-4 h-4" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  {pwdError && (
+                    <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs font-bold text-rose-600">
+                      {pwdError}
+                    </div>
+                  )}
+
+                  <div className="flex gap-3 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setChangePwdTarget(null)}
+                      className="flex-1 py-2.5 rounded-xl border border-slate-200 font-bold text-slate-600 text-xs"
+                    >
+                      Batal
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isUpdatingPwd}
+                      className="flex-1 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 disabled:opacity-60 text-white font-bold text-xs transition"
+                    >
+                      {isUpdatingPwd
+                        ? "Menyimpan..."
+                        : "Simpan Kata Sandi Baru"}
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     );
   }

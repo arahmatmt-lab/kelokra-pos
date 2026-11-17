@@ -1212,6 +1212,24 @@ export default function KelokraApp() {
     passwordSalt: string
   ) => {
     const target = accounts.find((a) => a.id === accountId);
+    if (!target) return;
+
+    // Strict RBAC & multi-tenant ownership check
+    const isAllowed =
+      currentRole === "SUPER_ADMIN" ||
+      (currentRole === "OWNER" &&
+        target.role === "CASHIER" &&
+        (target.parentOwnerId === activeTenantId ||
+          (!target.parentOwnerId &&
+            activeAccount?.storeName &&
+            target.storeName.toLowerCase() ===
+              activeAccount.storeName.toLowerCase())));
+
+    if (!isAllowed) {
+      showToast("Akses ditolak: Anda tidak memiliki izin mengubah kata sandi akun ini.");
+      return;
+    }
+
     setAccounts((prev) =>
       prev.map((a) => {
         if (a.id !== accountId) return a;
@@ -1220,14 +1238,12 @@ export default function KelokraApp() {
         return { ...clean, passwordHash, passwordSalt };
       })
     );
-    if (target) {
-      appendAudit(
-        "ACCOUNT_PASSWORD_RESET",
-        "Super Admin",
-        `Password akun @${target.username} berhasil direset dan dienkripsi ulang.`
-      );
-    }
-    showToast("Password akun berhasil direset & diamankan!");
+    appendAudit(
+      "ACCOUNT_PASSWORD_RESET",
+      currentRole === "OWNER" ? "Daftar Akun" : "Super Admin",
+      `Kata sandi akun @${target.username} (${target.role === "CASHIER" ? "Kasir" : "Owner"}) berhasil diubah.`
+    );
+    showToast(`Kata sandi @${target.username} berhasil diperbarui!`);
   };
 
   const handleDeleteAccount = (accountId: string) => {
