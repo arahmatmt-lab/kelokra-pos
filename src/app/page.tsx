@@ -1209,21 +1209,29 @@ export default function KelokraApp() {
   const handleResetAccountPassword = (
     accountId: string,
     passwordHash: string,
-    passwordSalt: string
+    passwordSalt: string,
+    updatedEmail?: string
   ) => {
     const target = accounts.find((a) => a.id === accountId);
     if (!target) return;
 
+    const isOwnOwnerAccount =
+      currentRole === "OWNER" &&
+      target.role === "OWNER" &&
+      target.id === authSession?.accountId;
+
+    const isOwnStoreCashier =
+      currentRole === "OWNER" &&
+      target.role === "CASHIER" &&
+      (target.parentOwnerId === activeTenantId ||
+        (!target.parentOwnerId &&
+          activeAccount?.storeName &&
+          target.storeName.toLowerCase() ===
+            activeAccount.storeName.toLowerCase()));
+
     // Strict RBAC & multi-tenant ownership check
     const isAllowed =
-      currentRole === "SUPER_ADMIN" ||
-      (currentRole === "OWNER" &&
-        target.role === "CASHIER" &&
-        (target.parentOwnerId === activeTenantId ||
-          (!target.parentOwnerId &&
-            activeAccount?.storeName &&
-            target.storeName.toLowerCase() ===
-              activeAccount.storeName.toLowerCase())));
+      currentRole === "SUPER_ADMIN" || isOwnOwnerAccount || isOwnStoreCashier;
 
     if (!isAllowed) {
       showToast("Akses ditolak: Anda tidak memiliki izin mengubah kata sandi akun ini.");
@@ -1235,13 +1243,18 @@ export default function KelokraApp() {
         if (a.id !== accountId) return a;
         const { password: _legacy, ...clean } = a;
         void _legacy;
-        return { ...clean, passwordHash, passwordSalt };
+        return {
+          ...clean,
+          passwordHash,
+          passwordSalt,
+          ...(updatedEmail ? { email: updatedEmail } : {}),
+        };
       })
     );
     appendAudit(
       "ACCOUNT_PASSWORD_RESET",
       currentRole === "OWNER" ? "Daftar Akun" : "Super Admin",
-      `Kata sandi akun @${target.username} (${target.role === "CASHIER" ? "Kasir" : "Owner"}) berhasil diubah.`
+      `Kata sandi akun @${target.username} (${target.role === "CASHIER" ? "Kasir" : "Owner"}) berhasil diubah${isOwnOwnerAccount ? " via OTP Gmail" : ""}.`
     );
     showToast(`Kata sandi @${target.username} berhasil diperbarui!`);
   };

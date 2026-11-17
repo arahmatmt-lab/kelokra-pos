@@ -77,3 +77,60 @@ export function verifySuperAdminCredentials(
   const b = crypto.createHash("sha256").update(expectedPass).digest();
   return userMatch && crypto.timingSafeEqual(a, b);
 }
+
+export const OTP_COOKIE_NAME = "kelokra_owner_otp";
+
+export interface OtpChallengePayload {
+  accountId: string;
+  email: string;
+  otpHash: string;
+  nonce: string;
+  attempts: number;
+  issuedAt: number;
+  exp: number;
+}
+
+export function hashOtpWithNonce(nonce: string, otp: string): string {
+  return crypto
+    .createHmac("sha256", getSigningSecret())
+    .update(`${nonce}:${otp}`)
+    .digest("hex");
+}
+
+export function signOtpChallenge(payload: OtpChallengePayload): string {
+  const data = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  const signature = crypto
+    .createHmac("sha256", getSigningSecret())
+    .update(data)
+    .digest("base64url");
+  return `${data}.${signature}`;
+}
+
+export function verifyOtpChallenge(
+  token: string | undefined
+): OtpChallengePayload | null {
+  if (!token || !token.includes(".")) return null;
+  const parts = token.split(".");
+  if (parts.length !== 2) return null;
+  const [data, sig] = parts;
+
+  const expectedSig = crypto
+    .createHmac("sha256", getSigningSecret())
+    .update(data)
+    .digest("base64url");
+
+  const sigBuf = Buffer.from(sig);
+  const expectedBuf = Buffer.from(expectedSig);
+  if (sigBuf.length !== expectedBuf.length) return null;
+  if (!crypto.timingSafeEqual(sigBuf, expectedBuf)) return null;
+
+  try {
+    const parsed = JSON.parse(
+      Buffer.from(data, "base64url").toString("utf-8")
+    ) as OtpChallengePayload;
+    if (!parsed.exp || Date.now() > parsed.exp) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}

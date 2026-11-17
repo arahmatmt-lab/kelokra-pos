@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Plus,
   Edit3,
@@ -73,13 +73,46 @@ interface SaasSettingsAdminViewProps {
   onResetAccountPassword?: (
     accountId: string,
     passwordHash: string,
-    passwordSalt: string
+    passwordSalt: string,
+    updatedEmail?: string
   ) => void;
   onUpdateSettings: (next: StoreSettings) => void;
   onExportBackup: () => void;
   onImportBackup?: (jsonText: string) => { ok: boolean; message: string };
   onResetAllData: () => void;
   onNavigate?: (menu: string) => void;
+}
+
+function GmailLogo({ className = "w-5 h-5" }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={className}
+      fill="none"
+      aria-hidden="true"
+    >
+      <path
+        d="M2.25 6.5v11A1.75 1.75 0 0 0 4 19.25h2.75v-7.5L12 15.7l5.25-3.95v7.5H20a1.75 1.75 0 0 0 1.75-1.75v-11c0-1.4-1.58-2.2-2.7-1.36L12 10.45 4.95 5.14C3.83 4.3 2.25 5.1 2.25 6.5Z"
+        fill="#FFFFFF"
+      />
+      <path
+        d="M2.25 6.5v11A1.75 1.75 0 0 0 4 19.25h2.75v-7.5L2.25 8.35V6.5Z"
+        fill="#4285F4"
+      />
+      <path
+        d="M21.75 6.5v11A1.75 1.75 0 0 1 20 19.25h-2.75v-7.5l4.5-3.4V6.5Z"
+        fill="#34A853"
+      />
+      <path
+        d="M17.25 11.75v-4.2l1.8-1.36c1.12-.84 2.7-.04 2.7 1.36v.8l-4.5 3.4Z"
+        fill="#FBBC05"
+      />
+      <path
+        d="M2.25 8.35v-1.85c0-1.4 1.58-2.2 2.7-1.36L12 10.45l5.25-3.95v5.25L12 15.7 2.25 8.35Z"
+        fill="#EA4335"
+      />
+    </svg>
+  );
 }
 
 export function SaasSettingsAdminView({
@@ -240,6 +273,208 @@ export function SaasSettingsAdminView({
       setRepeatNewPasswordInput("");
     } finally {
       setIsUpdatingPwd(false);
+    }
+  };
+
+  // Owner Change Own Password Modal (Best-practice 2FA: Current Password + Gmail OTP -> New Password)
+  const [ownerPwdTarget, setOwnerPwdTarget] = useState<ManagedAccount | null>(
+    null
+  );
+  const [ownerPwdStep, setOwnerPwdStep] = useState<1 | 2>(1);
+  const [ownerCurrentPwd, setOwnerCurrentPwd] = useState("");
+  const [ownerEmailInput, setOwnerEmailInput] = useState("");
+  const [ownerHasBoundEmail, setOwnerHasBoundEmail] = useState(false);
+  const [ownerOtpInput, setOwnerOtpInput] = useState("");
+  const [ownerNewPwd, setOwnerNewPwd] = useState("");
+  const [ownerRepeatNewPwd, setOwnerRepeatNewPwd] = useState("");
+  const [showOwnerCurPwd, setShowOwnerCurPwd] = useState(false);
+  const [showOwnerNewPwd, setShowOwnerNewPwd] = useState(false);
+  const [showOwnerRepPwd, setShowOwnerRepPwd] = useState(false);
+  const [ownerDeliveryMode, setOwnerDeliveryMode] = useState<
+    "GMAIL_SMTP" | "SIMULATION" | null
+  >(null);
+  const [ownerMaskedEmail, setOwnerMaskedEmail] = useState("");
+  const [ownerSimOtp, setOwnerSimOtp] = useState<string | null>(null);
+  const [ownerCooldownSec, setOwnerCooldownSec] = useState(0);
+  const [ownerExpirySec, setOwnerExpirySec] = useState(0);
+  const [ownerPwdError, setOwnerPwdError] = useState<string | null>(null);
+  const [isRequestingOtp, setIsRequestingOtp] = useState(false);
+  const [isVerifyingOtp, setIsVerifyingOtp] = useState(false);
+
+  useEffect(() => {
+    if (!ownerPwdTarget || ownerPwdStep !== 2) return;
+    if (ownerCooldownSec <= 0 && ownerExpirySec <= 0) return;
+    const timer = setInterval(() => {
+      setOwnerCooldownSec((c) => (c > 0 ? c - 1 : 0));
+      setOwnerExpirySec((e) => (e > 0 ? e - 1 : 0));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [ownerPwdTarget, ownerPwdStep, ownerCooldownSec, ownerExpirySec]);
+
+  const openOwnerChangePasswordModal = (acc: ManagedAccount) => {
+    const validExisting =
+      !!acc.email && acc.email !== "-" && acc.email.includes("@");
+    setOwnerPwdTarget(acc);
+    setOwnerPwdStep(1);
+    setOwnerCurrentPwd("");
+    setOwnerEmailInput(validExisting ? acc.email : "");
+    setOwnerHasBoundEmail(validExisting);
+    setOwnerOtpInput("");
+    setOwnerNewPwd("");
+    setOwnerRepeatNewPwd("");
+    setShowOwnerCurPwd(false);
+    setShowOwnerNewPwd(false);
+    setShowOwnerRepPwd(false);
+    setOwnerDeliveryMode(null);
+    setOwnerMaskedEmail("");
+    setOwnerSimOtp(null);
+    setOwnerCooldownSec(0);
+    setOwnerExpirySec(0);
+    setOwnerPwdError(null);
+  };
+
+  const sendOwnerOtpToGmail = async (targetAcc: ManagedAccount, email: string) => {
+    setIsRequestingOtp(true);
+    setOwnerPwdError(null);
+    try {
+      const res = await fetch("/api/auth/otp/request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          accountId: targetAcc.id,
+          email,
+          storeName: targetAcc.storeName,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setOwnerPwdError(
+          data.error || "Gagal mengirim kode OTP ke Gmail. Coba lagi."
+        );
+        return false;
+      }
+      setOwnerDeliveryMode(data.deliveryMode);
+      setOwnerMaskedEmail(data.maskedEmail || email);
+      setOwnerSimOtp(data.simulationOtp || null);
+      setOwnerCooldownSec(data.resendCooldownSeconds || 60);
+      setOwnerExpirySec(data.expiresInSeconds || 300);
+      setOwnerPwdStep(2);
+      return true;
+    } catch {
+      setOwnerPwdError(
+        "Gagal terhubung ke server untuk mengirim kode OTP Gmail."
+      );
+      return false;
+    } finally {
+      setIsRequestingOtp(false);
+    }
+  };
+
+  const handleRequestOwnerOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!ownerPwdTarget || isRequestingOtp) return;
+    setOwnerPwdError(null);
+
+    if (!ownerCurrentPwd) {
+      setOwnerPwdError("Masukkan kata sandi saat ini terlebih dahulu.");
+      return;
+    }
+
+    let matched = false;
+    if (ownerPwdTarget.passwordHash && ownerPwdTarget.passwordSalt) {
+      matched = await verifyPasswordWithSalt(
+        ownerCurrentPwd,
+        ownerPwdTarget.passwordHash,
+        ownerPwdTarget.passwordSalt
+      );
+    } else if (ownerPwdTarget.password) {
+      matched = ownerPwdTarget.password === ownerCurrentPwd;
+    }
+
+    if (!matched) {
+      setOwnerPwdError("Kata sandi saat ini tidak benar. Periksa kembali.");
+      return;
+    }
+
+    const cleanEmail = ownerEmailInput.trim().toLowerCase();
+    const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+    if (!emailRegex.test(cleanEmail)) {
+      setOwnerPwdError("Masukkan alamat email Gmail yang valid.");
+      return;
+    }
+
+    await sendOwnerOtpToGmail(ownerPwdTarget, cleanEmail);
+  };
+
+  const handleVerifyAndSaveOwnerPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!ownerPwdTarget || isVerifyingOtp) return;
+    setOwnerPwdError(null);
+
+    const cleanOtp = ownerOtpInput.replace(/\s+/g, "");
+    if (!/^\d{6}$/.test(cleanOtp)) {
+      setOwnerPwdError("Kode OTP wajib berupa 6 digit angka.");
+      return;
+    }
+
+    if (ownerNewPwd.length < 8) {
+      setOwnerPwdError(
+        "Demi keamanan Owner, kata sandi baru minimal 8 karakter."
+      );
+      return;
+    }
+    if (!/[A-Za-z]/.test(ownerNewPwd) || !/\d/.test(ownerNewPwd)) {
+      setOwnerPwdError(
+        "Kata sandi baru wajib mengombinasikan huruf dan angka agar kuat."
+      );
+      return;
+    }
+    if (ownerNewPwd === ownerCurrentPwd) {
+      setOwnerPwdError(
+        "Kata sandi baru tidak boleh sama dengan kata sandi lama."
+      );
+      return;
+    }
+    if (ownerNewPwd !== ownerRepeatNewPwd) {
+      setOwnerPwdError("Pengulangan kata sandi baru tidak cocok.");
+      return;
+    }
+
+    setIsVerifyingOtp(true);
+    try {
+      const verifyRes = await fetch("/api/auth/otp/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ otp: cleanOtp }),
+      });
+      const verifyData = await verifyRes.json();
+      if (!verifyRes.ok || !verifyData.verified) {
+        setOwnerPwdError(
+          verifyData.error || "Kode OTP salah atau telah kadaluarsa."
+        );
+        return;
+      }
+
+      const { passwordHash, passwordSalt } = await hashPasswordWithSalt(
+        ownerNewPwd
+      );
+      if (onResetAccountPassword) {
+        onResetAccountPassword(
+          ownerPwdTarget.id,
+          passwordHash,
+          passwordSalt,
+          verifyData.email || ownerEmailInput.trim().toLowerCase()
+        );
+      }
+      setOwnerPwdTarget(null);
+      setOwnerCurrentPwd("");
+      setOwnerOtpInput("");
+      setOwnerNewPwd("");
+      setOwnerRepeatNewPwd("");
+    } catch {
+      setOwnerPwdError("Gagal memverifikasi kode OTP ke server.");
+    } finally {
+      setIsVerifyingOtp(false);
     }
   };
 
@@ -878,7 +1113,16 @@ export function SaasSettingsAdminView({
                                 <span>Ubah Kata Sandi</span>
                               </button>
                             ) : (
-                              <span className="text-xs text-slate-400">-</span>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  openOwnerChangePasswordModal(acc)
+                                }
+                                className="px-3 py-1.5 rounded-xl border border-rose-200 bg-white hover:bg-rose-50 text-navy-800 text-xs font-bold inline-flex items-center gap-1.5 transition shadow-2xs"
+                              >
+                                <GmailLogo className="w-4 h-4 shrink-0" />
+                                <span>Ubah Kata Sandi</span>
+                              </button>
                             )}
                           </td>
                         )}
@@ -1139,6 +1383,297 @@ export function SaasSettingsAdminView({
                       {isUpdatingPwd
                         ? "Menyimpan..."
                         : "Simpan Kata Sandi Baru"}
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Modal Ubah Kata Sandi Owner (Via Gmail OTP + Keamanan 2 Lapis) */}
+        {ownerPwdTarget && userRole === "OWNER" && (
+          <div className="fixed inset-0 z-50 bg-navy-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[92vh] overflow-y-auto">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-rose-50 border border-rose-200/80 flex items-center justify-center shrink-0">
+                    <GmailLogo className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-base sm:text-lg font-extrabold text-navy-800">
+                      Ubah Kata Sandi Owner
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      Verifikasi via <b>Gmail</b> • @{ownerPwdTarget.username}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setOwnerPwdTarget(null)}
+                  aria-label="Tutup Modal Owner"
+                  className="p-1 rounded-lg text-slate-400 hover:text-slate-600"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {ownerPwdStep === 1 ? (
+                <form
+                  onSubmit={handleRequestOwnerOtp}
+                  className="space-y-4 text-sm"
+                >
+                  <div className="p-3 rounded-xl bg-emerald-50/70 border border-emerald-200 text-xs text-navy-800 flex items-start gap-2.5">
+                    <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                    <span>
+                      <b>Keamanan 2 Lapis:</b> Masukkan kata sandi saat ini terlebih dahulu, lalu kirim kode OTP 6 digit ke Gmail Anda.
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      Kata Sandi Saat Ini
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={showOwnerCurPwd ? "text" : "password"}
+                        required
+                        autoFocus
+                        value={ownerCurrentPwd}
+                        onChange={(e) => setOwnerCurrentPwd(e.target.value)}
+                        placeholder="Masukkan kata sandi saat ini..."
+                        className="w-full px-3.5 py-2.5 pr-10 rounded-xl border border-slate-200 focus:outline-none focus:border-emerald-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowOwnerCurPwd((v) => !v)}
+                        aria-label="Tampilkan Kata Sandi Saat Ini"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-navy-800"
+                      >
+                        {showOwnerCurPwd ? (
+                          <EyeOff className="w-4 h-4" />
+                        ) : (
+                          <Eye className="w-4 h-4" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="flex items-center gap-1.5 text-xs font-bold text-slate-700 mb-1">
+                      <GmailLogo className="w-3.5 h-3.5" />
+                      <span>Alamat Gmail Verifikasi (OTP)</span>
+                    </label>
+                    <input
+                      type="email"
+                      required
+                      readOnly={ownerHasBoundEmail}
+                      value={ownerEmailInput}
+                      onChange={(e) => setOwnerEmailInput(e.target.value)}
+                      placeholder="contoh@gmail.com"
+                      className={`w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-emerald-500 ${
+                        ownerHasBoundEmail
+                          ? "bg-slate-50 text-slate-600 cursor-not-allowed"
+                          : ""
+                      }`}
+                    />
+                    <p className="text-[11px] text-slate-400 mt-1">
+                      {ownerHasBoundEmail
+                        ? "Dikunci ke alamat Gmail terdaftar pada akun Owner ini demi keamanan."
+                        : "Belum ada email terdaftar. Email ini akan dikaitkan permanen ke akun Owner Anda."}
+                    </p>
+                  </div>
+
+                  {ownerPwdError && (
+                    <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs font-bold text-rose-600">
+                      {ownerPwdError}
+                    </div>
+                  )}
+
+                  <div className="flex gap-3 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setOwnerPwdTarget(null)}
+                      className="flex-1 py-2.5 rounded-xl border border-slate-200 font-bold text-slate-600 text-xs"
+                    >
+                      Batal
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isRequestingOtp}
+                      className="flex-1 py-2.5 rounded-xl bg-navy-800 hover:bg-emerald-600 disabled:opacity-60 text-white font-bold text-xs inline-flex items-center justify-center gap-1.5 transition"
+                    >
+                      <GmailLogo className="w-4 h-4" />
+                      <span>
+                        {isRequestingOtp
+                          ? "Mengirim Kode..."
+                          : "Kirim Kode OTP ke Gmail"}
+                      </span>
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <form
+                  onSubmit={handleVerifyAndSaveOwnerPassword}
+                  className="space-y-4 text-sm"
+                >
+                  <div
+                    className={`p-3.5 rounded-xl border text-xs space-y-1.5 ${
+                      ownerDeliveryMode === "GMAIL_SMTP"
+                        ? "bg-emerald-50 border-emerald-200 text-emerald-900"
+                        : "bg-amber-50 border-amber-200 text-amber-900"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-extrabold inline-flex items-center gap-1.5">
+                        <GmailLogo className="w-4 h-4" />
+                        <span>
+                          {ownerDeliveryMode === "GMAIL_SMTP"
+                            ? `Kode OTP Terkirim ke ${ownerMaskedEmail}`
+                            : `Mode Simulasi OTP (${ownerMaskedEmail})`}
+                        </span>
+                      </span>
+                      <span className="font-mono font-bold text-[11px]">
+                        {Math.floor(ownerExpirySec / 60)}:
+                        {String(ownerExpirySec % 60).padStart(2, "0")}
+                      </span>
+                    </div>
+                    {ownerDeliveryMode === "GMAIL_SMTP" ? (
+                      <p>
+                        Periksa Kotak Masuk atau folder Spam pada Gmail Anda, lalu masukkan 6 digit kode di bawah.
+                      </p>
+                    ) : (
+                      <div className="space-y-1">
+                        <p>
+                          SMTP Gmail belum diset di server (<code>GMAIL_USER</code> &amp; <code>GMAIL_APP_PASSWORD</code>), sehingga kode uji coba ditampilkan sementara:
+                        </p>
+                        {ownerSimOtp && (
+                          <p className="font-mono font-extrabold text-base tracking-widest text-navy-800 bg-white px-3 py-1.5 rounded-lg border border-amber-300 inline-block">
+                            {ownerSimOtp}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-xs font-bold text-slate-700">
+                        Kode OTP Gmail (6 Digit)
+                      </label>
+                      <button
+                        type="button"
+                        disabled={ownerCooldownSec > 0 || isRequestingOtp}
+                        onClick={() =>
+                          sendOwnerOtpToGmail(
+                            ownerPwdTarget,
+                            ownerEmailInput.trim().toLowerCase()
+                          )
+                        }
+                        className="text-[11px] font-bold text-emerald-700 hover:underline disabled:text-slate-400 disabled:no-underline"
+                      >
+                        {ownerCooldownSec > 0
+                          ? `Kirim ulang (${ownerCooldownSec}d)`
+                          : "Kirim Ulang Kode"}
+                      </button>
+                    </div>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={6}
+                      required
+                      autoFocus
+                      value={ownerOtpInput}
+                      onChange={(e) =>
+                        setOwnerOtpInput(e.target.value.replace(/\D/g, ""))
+                      }
+                      placeholder="Masukkan 6 digit kode OTP"
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 font-mono text-base font-extrabold tracking-widest text-center focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      Kata Sandi Baru (Min. 8 Karakter, Huruf &amp; Angka)
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={showOwnerNewPwd ? "text" : "password"}
+                        required
+                        value={ownerNewPwd}
+                        onChange={(e) => setOwnerNewPwd(e.target.value)}
+                        placeholder="Contoh: TokoMaju2026"
+                        className="w-full px-3.5 py-2.5 pr-10 rounded-xl border border-slate-200 focus:outline-none focus:border-emerald-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowOwnerNewPwd((v) => !v)}
+                        aria-label="Tampilkan Kata Sandi Baru Owner"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-navy-800"
+                      >
+                        {showOwnerNewPwd ? (
+                          <EyeOff className="w-4 h-4" />
+                        ) : (
+                          <Eye className="w-4 h-4" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      Ulangi Kata Sandi Baru
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={showOwnerRepPwd ? "text" : "password"}
+                        required
+                        value={ownerRepeatNewPwd}
+                        onChange={(e) => setOwnerRepeatNewPwd(e.target.value)}
+                        placeholder="Ketik ulang kata sandi baru..."
+                        className="w-full px-3.5 py-2.5 pr-10 rounded-xl border border-slate-200 focus:outline-none focus:border-emerald-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowOwnerRepPwd((v) => !v)}
+                        aria-label="Tampilkan Ulangi Kata Sandi Baru Owner"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-navy-800"
+                      >
+                        {showOwnerRepPwd ? (
+                          <EyeOff className="w-4 h-4" />
+                        ) : (
+                          <Eye className="w-4 h-4" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  {ownerPwdError && (
+                    <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs font-bold text-rose-600">
+                      {ownerPwdError}
+                    </div>
+                  )}
+
+                  <div className="flex gap-3 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOwnerPwdStep(1);
+                        setOwnerPwdError(null);
+                      }}
+                      className="flex-1 py-2.5 rounded-xl border border-slate-200 font-bold text-slate-600 text-xs"
+                    >
+                      Kembali
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isVerifyingOtp}
+                      className="flex-1 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 disabled:opacity-60 text-white font-bold text-xs transition"
+                    >
+                      {isVerifyingOtp
+                        ? "Memverifikasi OTP..."
+                        : "Verifikasi & Simpan Sandi"}
                     </button>
                   </div>
                 </form>
@@ -2522,14 +3057,17 @@ export function SaasSettingsAdminView({
                 )}
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Email (Opsional)
+                <label className="flex items-center gap-1.5 text-xs font-bold text-slate-700 mb-1">
+                  <GmailLogo className="w-3.5 h-3.5" />
+                  <span>
+                    Email Gmail {accRole === "OWNER" ? "Owner (Untuk OTP)" : "(Opsional)"}
+                  </span>
                 </label>
                 <input
                   type="email"
                   value={accEmail}
                   onChange={(e) => setAccEmail(e.target.value)}
-                  placeholder="email@toko.id"
+                  placeholder="contoh@gmail.com"
                   className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200"
                 />
               </div>
