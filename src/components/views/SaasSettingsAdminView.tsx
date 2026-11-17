@@ -250,9 +250,62 @@ export function SaasSettingsAdminView({
     setPwdError(null);
   };
 
+  const verifyCurrentAccountPassword = async (
+    targetAcc: ManagedAccount,
+    plainPassword: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const res = await fetch("/api/auth/verify-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          accountId: targetAcc.id,
+          password: plainPassword,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (res.status === 401 || res.status === 403) {
+        return {
+          ok: false,
+          error:
+            data.error ||
+            "Sesi login telah berakhir. Silakan logout dan login ulang.",
+        };
+      }
+
+      if (data?.cloudConfigured) {
+        if (!res.ok) {
+          return {
+            ok: false,
+            error:
+              data.error ||
+              "Gagal memverifikasi kata sandi ke server. Coba lagi.",
+          };
+        }
+        return { ok: Boolean(data.valid) };
+      }
+    } catch {
+      // Offline or unreachable — fall back to local hash verification
+    }
+
+    if (targetAcc.passwordHash && targetAcc.passwordSalt) {
+      const ok = await verifyPasswordWithSalt(
+        plainPassword,
+        targetAcc.passwordHash,
+        targetAcc.passwordSalt
+      );
+      return { ok };
+    }
+    if (targetAcc.password) {
+      return { ok: targetAcc.password === plainPassword };
+    }
+    return { ok: false };
+  };
+
   const handleVerifyOldCashierPassword = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!changePwdTarget) return;
+    if (!changePwdTarget || isUpdatingPwd) return;
     setPwdError(null);
 
     if (!oldPasswordInput) {
@@ -260,25 +313,25 @@ export function SaasSettingsAdminView({
       return;
     }
 
-    let matched = false;
-    if (changePwdTarget.passwordHash && changePwdTarget.passwordSalt) {
-      matched = await verifyPasswordWithSalt(
-        oldPasswordInput,
-        changePwdTarget.passwordHash,
-        changePwdTarget.passwordSalt
+    setIsUpdatingPwd(true);
+    try {
+      const check = await verifyCurrentAccountPassword(
+        changePwdTarget,
+        oldPasswordInput
       );
-    } else if (changePwdTarget.password) {
-      matched = changePwdTarget.password === oldPasswordInput;
-    }
+      if (!check.ok) {
+        setPwdError(
+          check.error || "Kata sandi lama tidak benar. Periksa kembali."
+        );
+        return;
+      }
 
-    if (!matched) {
-      setPwdError("Kata sandi lama tidak benar. Periksa kembali.");
-      return;
+      setPwdStep(2);
+      setNewPasswordInput("");
+      setRepeatNewPasswordInput("");
+    } finally {
+      setIsUpdatingPwd(false);
     }
-
-    setPwdStep(2);
-    setNewPasswordInput("");
-    setRepeatNewPasswordInput("");
   };
 
   const handleSaveNewCashierPassword = async (e: React.FormEvent) => {
@@ -416,26 +469,23 @@ export function SaasSettingsAdminView({
       return;
     }
 
-    let matched = false;
-    if (ownerPwdTarget.passwordHash && ownerPwdTarget.passwordSalt) {
-      matched = await verifyPasswordWithSalt(
-        ownerCurrentPwd,
-        ownerPwdTarget.passwordHash,
-        ownerPwdTarget.passwordSalt
-      );
-    } else if (ownerPwdTarget.password) {
-      matched = ownerPwdTarget.password === ownerCurrentPwd;
-    }
-
-    if (!matched) {
-      setOwnerPwdError("Kata sandi saat ini tidak benar. Periksa kembali.");
-      return;
-    }
-
     const cleanEmail = ownerEmailInput.trim().toLowerCase();
     const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
     if (!emailRegex.test(cleanEmail)) {
       setOwnerPwdError("Masukkan alamat email Gmail yang valid.");
+      return;
+    }
+
+    setIsRequestingOtp(true);
+    const check = await verifyCurrentAccountPassword(
+      ownerPwdTarget,
+      ownerCurrentPwd
+    );
+    if (!check.ok) {
+      setIsRequestingOtp(false);
+      setOwnerPwdError(
+        check.error || "Kata sandi saat ini tidak benar. Periksa kembali."
+      );
       return;
     }
 
