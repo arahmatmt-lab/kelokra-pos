@@ -20,7 +20,11 @@ import {
   generateId,
   getRemainingTimeInfo,
 } from "@/lib/format";
-import { clampPositiveInt, hashPasswordWithSalt } from "@/lib/security";
+import {
+  clampPositiveInt,
+  copyTextSafe,
+  hashPasswordWithSalt,
+} from "@/lib/security";
 
 interface StoreAccountDetailModalProps {
   ownerAccount: ManagedAccount | null;
@@ -331,7 +335,7 @@ export function StoreAccountDetailModal({
                 type="button"
                 onClick={() => {
                   const txt = `KELOKRA Login (${oneTimeCredential.name})\nUsername: ${oneTimeCredential.username}\nPassword: ${oneTimeCredential.password}`;
-                  navigator.clipboard?.writeText(txt).catch(() => {});
+                  copyTextSafe(txt);
                   setCopiedCredential(true);
                 }}
                 className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-sans font-bold text-xs inline-flex items-center gap-1"

@@ -34,7 +34,7 @@ import {
   StoreSettings,
 } from "@/types/nextpos";
 import { formatIDR, generateId } from "@/lib/format";
-import { clampNonNegative, escapeHtml } from "@/lib/security";
+import { clampNonNegative, copyTextSafe, escapeHtml } from "@/lib/security";
 import { ProductVisual } from "@/components/ProductVisual";
 
 interface PosViewProps {
@@ -1043,7 +1043,7 @@ export function PosView({
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
-                            navigator.clipboard?.writeText(ch.accountNumber);
+                            copyTextSafe(ch.accountNumber);
                           }}
                           title="Salin Nomor Rekening"
                           className="p-2 rounded-lg border border-slate-200 bg-white text-slate-500 hover:text-emerald-600"

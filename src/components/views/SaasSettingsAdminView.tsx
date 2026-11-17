@@ -46,6 +46,7 @@ import {
 import {
   ALLOWED_QRIS_IMAGE_TYPES,
   clampPositiveInt,
+  copyTextSafe,
   hashPasswordWithSalt,
 } from "@/lib/security";
 import { StoreAccountDetailModal } from "@/components/StoreAccountDetailModal";
@@ -1680,7 +1681,7 @@ export function SaasSettingsAdminView({
                         `[${c.role}] ${c.name} -> Username: ${c.username} | Password: ${c.password}`
                     )
                     .join("\n");
-                  navigator.clipboard?.writeText(text).catch(() => {});
+                  copyTextSafe(text);
                   setCopiedBatchCreds(true);
                 }}
                 className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold inline-flex items-center gap-1"
