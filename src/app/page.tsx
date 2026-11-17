@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   LayoutDashboard,
   ShoppingCart,
@@ -74,9 +74,33 @@ import { ProductsInventoryView } from "@/components/views/ProductsInventoryView"
 import { ReportsFinanceView } from "@/components/views/ReportsFinanceView";
 import { SaasSettingsAdminView } from "@/components/views/SaasSettingsAdminView";
 import { LoginScreen } from "@/components/LoginScreen";
+import { hashPasswordWithSalt, sanitizeJsonObject } from "@/lib/security";
 
 const STORAGE_KEY = "kelokra_saas_state_v2";
 const SESSION_STORAGE_KEY = "kelokra_auth_session_v1";
+const TENANT_STORE_PREFIX = "kelokra_tenant_store_v1_";
+
+function resolveTenantId(
+  session: AuthSession | null,
+  allAccounts: ManagedAccount[]
+): string {
+  if (!session) return DEFAULT_TENANT_ID;
+  if (session.role === "SUPER_ADMIN") return "SUPER_ADMIN_GLOBAL";
+  if (session.role === "OWNER") {
+    return session.accountId || DEFAULT_TENANT_ID;
+  }
+  const matchedCashier = allAccounts.find((a) => a.id === session.accountId);
+  if (matchedCashier?.parentOwnerId) return matchedCashier.parentOwnerId;
+  if (matchedCashier?.storeName) {
+    const ownerSameStore = allAccounts.find(
+      (a) =>
+        a.role === "OWNER" &&
+        a.storeName.toLowerCase() === matchedCashier.storeName.toLowerCase()
+    );
+    if (ownerSameStore) return ownerSameStore.id;
+  }
+  return session.accountId || DEFAULT_TENANT_ID;
+}
 
 export default function KelokraApp() {
   // Authentication & Session state
@@ -100,7 +124,11 @@ export default function KelokraApp() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  // Core Business Domain States (Initialized Empty)
+  // Active Tenant Scope (Multi-tenant isolation per Owner/Store)
+  const [activeTenantId, setActiveTenantId] = useState<string | null>(null);
+  const loadedTenantRef = useRef<string | null>(null);
+
+  // Core Business Domain States (Initialized Empty per Tenant)
   const [products, setProducts] = useState<Product[]>(INITIAL_PRODUCTS);
   const [sales, setSales] = useState<SaleTransaction[]>(INITIAL_SALES);
   const [movements, setMovements] = useState<StockMovement[]>(
@@ -129,71 +157,208 @@ export default function KelokraApp() {
     }, 3500);
   };
 
-  // Load persisted business data + auth session on mount
-  useEffect(() => {
-    let loadedAccounts: ManagedAccount[] = INITIAL_MANAGED_ACCOUNTS;
+  const loadAndApplyTenantStore = (
+    tenantId: string,
+    storeNameHint?: string,
+    legacyFallback?: Record<string, unknown> | null
+  ) => {
+    loadedTenantRef.current = tenantId;
+    setActiveTenantId(tenantId);
+
+    if (tenantId === "SUPER_ADMIN_GLOBAL") {
+      setProducts(INITIAL_PRODUCTS);
+      setSales(INITIAL_SALES);
+      setMovements(INITIAL_STOCK_MOVEMENTS);
+      setSuppliers(INITIAL_SUPPLIERS);
+      setPurchases(INITIAL_PURCHASES);
+      setReturns(INITIAL_RETURNS);
+      setCustomers(INITIAL_CUSTOMERS);
+      setExpenses(INITIAL_EXPENSES);
+      setShifts(INITIAL_SHIFTS);
+      setStoreSettings(INITIAL_STORE_SETTINGS);
+      return;
+    }
 
     try {
-      localStorage.removeItem("nextpos_saas_state_v1_1");
-      localStorage.removeItem("kelokra_saas_state_v1");
-
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed.products) setProducts(parsed.products);
-        if (parsed.sales) setSales(parsed.sales);
-        if (parsed.movements) setMovements(parsed.movements);
-        if (parsed.suppliers) setSuppliers(parsed.suppliers);
-        if (parsed.purchases) setPurchases(parsed.purchases);
-        if (parsed.returns) setReturns(parsed.returns);
-        if (parsed.customers) setCustomers(parsed.customers);
-        if (parsed.expenses) setExpenses(parsed.expenses);
-        if (parsed.shifts) setShifts(parsed.shifts);
-        if (parsed.accounts) {
-          loadedAccounts = parsed.accounts;
-          setAccounts(parsed.accounts);
-        }
-        if (parsed.storeSettings) {
-          setStoreSettings({
-            ...INITIAL_STORE_SETTINGS,
-            ...parsed.storeSettings,
-          });
-        }
-        if (parsed.auditLogs) setAuditLogs(parsed.auditLogs);
+      const tenantRaw = localStorage.getItem(`${TENANT_STORE_PREFIX}${tenantId}`);
+      if (tenantRaw) {
+        const parsed = JSON.parse(tenantRaw);
+        setProducts(Array.isArray(parsed.products) ? parsed.products : []);
+        setSales(Array.isArray(parsed.sales) ? parsed.sales : []);
+        setMovements(Array.isArray(parsed.movements) ? parsed.movements : []);
+        setSuppliers(Array.isArray(parsed.suppliers) ? parsed.suppliers : []);
+        setPurchases(Array.isArray(parsed.purchases) ? parsed.purchases : []);
+        setReturns(Array.isArray(parsed.returns) ? parsed.returns : []);
+        setCustomers(Array.isArray(parsed.customers) ? parsed.customers : []);
+        setExpenses(Array.isArray(parsed.expenses) ? parsed.expenses : []);
+        setShifts(Array.isArray(parsed.shifts) ? parsed.shifts : []);
+        setStoreSettings({
+          ...INITIAL_STORE_SETTINGS,
+          ...(parsed.storeSettings || {}),
+          storeName:
+            parsed.storeSettings?.storeName ||
+            storeNameHint ||
+            INITIAL_STORE_SETTINGS.storeName,
+        });
+        return;
       }
 
-      const savedSession = localStorage.getItem(SESSION_STORAGE_KEY);
-      if (savedSession) {
-        const parsedSession = JSON.parse(savedSession) as AuthSession;
-        if (parsedSession.role === "SUPER_ADMIN") {
-          setAuthSession(parsedSession);
-          setActiveMenu("dashboard");
-        } else if (parsedSession.accountId) {
-          const matchedAcc = loadedAccounts.find(
-            (a) => a.id === parsedSession.accountId
-          );
-          if (
-            matchedAcc &&
-            matchedAcc.status === "AKTIF" &&
-            !getRemainingTimeInfo(matchedAcc.expiresAt).isExpired
-          ) {
-            setAuthSession(parsedSession);
-            setActiveMenu(
-              parsedSession.role === "CASHIER" ? "pos" : "dashboard"
-            );
-          } else {
-            localStorage.removeItem(SESSION_STORAGE_KEY);
-            setLoginNotice(
-              "Sesi Anda telah berakhir karena masa aktif akun habis atau dinonaktifkan oleh Super Admin."
-            );
-          }
-        }
+      if (legacyFallback) {
+        const lf = legacyFallback as Record<string, unknown>;
+        setProducts(Array.isArray(lf.products) ? lf.products : []);
+        setSales(Array.isArray(lf.sales) ? lf.sales : []);
+        setMovements(Array.isArray(lf.movements) ? lf.movements : []);
+        setSuppliers(Array.isArray(lf.suppliers) ? lf.suppliers : []);
+        setPurchases(Array.isArray(lf.purchases) ? lf.purchases : []);
+        setReturns(Array.isArray(lf.returns) ? lf.returns : []);
+        setCustomers(Array.isArray(lf.customers) ? lf.customers : []);
+        setExpenses(Array.isArray(lf.expenses) ? lf.expenses : []);
+        setShifts(Array.isArray(lf.shifts) ? lf.shifts : []);
+        setStoreSettings({
+          ...INITIAL_STORE_SETTINGS,
+          ...((lf.storeSettings as Partial<StoreSettings>) || {}),
+          storeName:
+            (lf.storeSettings as Partial<StoreSettings>)?.storeName ||
+            storeNameHint ||
+            INITIAL_STORE_SETTINGS.storeName,
+        });
+        return;
       }
     } catch {
-      // Ignore storage error
-    } finally {
-      setIsAuthChecking(false);
+      // Fall through to clean tenant defaults
     }
+
+    setProducts(INITIAL_PRODUCTS);
+    setSales(INITIAL_SALES);
+    setMovements(INITIAL_STOCK_MOVEMENTS);
+    setSuppliers(INITIAL_SUPPLIERS);
+    setPurchases(INITIAL_PURCHASES);
+    setReturns(INITIAL_RETURNS);
+    setCustomers(INITIAL_CUSTOMERS);
+    setExpenses(INITIAL_EXPENSES);
+    setShifts(INITIAL_SHIFTS);
+    setStoreSettings({
+      ...INITIAL_STORE_SETTINGS,
+      storeName: storeNameHint || INITIAL_STORE_SETTINGS.storeName,
+    });
+  };
+
+  // Load persisted accounts, migrate legacy plaintext passwords, and restore tenant state
+  useEffect(() => {
+    let isCancelled = false;
+
+    const initApp = async () => {
+      let loadedAccounts: ManagedAccount[] = INITIAL_MANAGED_ACCOUNTS;
+      let loadedAuditLogs: AuditLogEntry[] = INITIAL_AUDIT_LOGS;
+      let legacyOperational: Record<string, unknown> | null = null;
+
+      try {
+        localStorage.removeItem("nextpos_saas_state_v1_1");
+        localStorage.removeItem("kelokra_saas_state_v1");
+
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed.accounts)) {
+            let migratedAny = false;
+            const migratedList: ManagedAccount[] = [];
+            for (const acc of parsed.accounts as ManagedAccount[]) {
+              if (acc.password && (!acc.passwordHash || !acc.passwordSalt)) {
+                const { passwordHash, passwordSalt } = await hashPasswordWithSalt(
+                  acc.password
+                );
+                const { password: _legacy, ...cleanAcc } = acc;
+                void _legacy;
+                migratedList.push({
+                  ...cleanAcc,
+                  passwordHash,
+                  passwordSalt,
+                });
+                migratedAny = true;
+              } else if (acc.password) {
+                const { password: _legacy, ...cleanAcc } = acc;
+                void _legacy;
+                migratedList.push(cleanAcc);
+                migratedAny = true;
+              } else {
+                migratedList.push(acc);
+              }
+            }
+            loadedAccounts = migratedList;
+            if (migratedAny) {
+              localStorage.setItem(
+                STORAGE_KEY,
+                JSON.stringify({
+                  accounts: migratedList,
+                  auditLogs: Array.isArray(parsed.auditLogs)
+                    ? parsed.auditLogs
+                    : [],
+                })
+              );
+            }
+          }
+          if (Array.isArray(parsed.auditLogs)) {
+            loadedAuditLogs = parsed.auditLogs;
+          }
+          if (
+            (Array.isArray(parsed.products) && parsed.products.length > 0) ||
+            (Array.isArray(parsed.sales) && parsed.sales.length > 0) ||
+            (Array.isArray(parsed.customers) && parsed.customers.length > 0)
+          ) {
+            legacyOperational = parsed;
+          }
+        }
+
+        if (isCancelled) return;
+        setAccounts(loadedAccounts);
+        setAuditLogs(loadedAuditLogs);
+
+        const savedSession = localStorage.getItem(SESSION_STORAGE_KEY);
+        if (savedSession) {
+          const parsedSession = JSON.parse(savedSession) as AuthSession;
+          if (parsedSession.role === "SUPER_ADMIN") {
+            loadAndApplyTenantStore("SUPER_ADMIN_GLOBAL");
+            setAuthSession(parsedSession);
+            setActiveMenu("dashboard");
+          } else if (parsedSession.accountId) {
+            const matchedAcc = loadedAccounts.find(
+              (a) => a.id === parsedSession.accountId
+            );
+            if (
+              matchedAcc &&
+              matchedAcc.status === "AKTIF" &&
+              !getRemainingTimeInfo(matchedAcc.expiresAt).isExpired
+            ) {
+              const tid = resolveTenantId(parsedSession, loadedAccounts);
+              const onlyOneStore =
+                loadedAccounts.filter((a) => a.role === "OWNER").length <= 1;
+              loadAndApplyTenantStore(
+                tid,
+                parsedSession.storeName,
+                onlyOneStore ? legacyOperational : null
+              );
+              setAuthSession(parsedSession);
+              setActiveMenu(
+                parsedSession.role === "CASHIER" ? "pos" : "dashboard"
+              );
+            } else {
+              localStorage.removeItem(SESSION_STORAGE_KEY);
+              setLoginNotice(
+                "Sesi Anda telah berakhir karena masa aktif akun habis atau dinonaktifkan oleh Super Admin."
+              );
+            }
+          }
+        }
+      } catch {
+        // Ignore storage error
+      } finally {
+        if (!isCancelled) {
+          setIsAuthChecking(false);
+        }
+      }
+    };
+
+    initApp();
 
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("/sw.js").catch(() => {});
@@ -206,15 +371,41 @@ export default function KelokraApp() {
       }
     };
     window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    return () => {
+      isCancelled = true;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
   }, []);
 
-  // Save business state changes to localStorage
+  // Save global accounts & audit logs
   useEffect(() => {
     if (isAuthChecking) return;
     try {
       localStorage.setItem(
         STORAGE_KEY,
+        JSON.stringify({
+          accounts,
+          auditLogs,
+        })
+      );
+    } catch {
+      // Ignore quota errors
+    }
+  }, [isAuthChecking, accounts, auditLogs]);
+
+  // Save isolated operational data per Owner store
+  useEffect(() => {
+    if (
+      isAuthChecking ||
+      !activeTenantId ||
+      activeTenantId === "SUPER_ADMIN_GLOBAL" ||
+      loadedTenantRef.current !== activeTenantId
+    ) {
+      return;
+    }
+    try {
+      localStorage.setItem(
+        `${TENANT_STORE_PREFIX}${activeTenantId}`,
         JSON.stringify({
           products,
           sales,
@@ -225,9 +416,7 @@ export default function KelokraApp() {
           customers,
           expenses,
           shifts,
-          accounts,
           storeSettings,
-          auditLogs,
         })
       );
     } catch {
@@ -235,6 +424,7 @@ export default function KelokraApp() {
     }
   }, [
     isAuthChecking,
+    activeTenantId,
     products,
     sales,
     movements,
@@ -244,9 +434,7 @@ export default function KelokraApp() {
     customers,
     expenses,
     shifts,
-    accounts,
     storeSettings,
-    auditLogs,
   ]);
 
   const currentRole = authSession?.role || "OWNER";
@@ -272,6 +460,8 @@ export default function KelokraApp() {
 
   // Login Success Handler
   const handleLoginSuccess = (session: AuthSession) => {
+    const tid = resolveTenantId(session, accounts);
+    loadAndApplyTenantStore(tid, session.storeName);
     setAuthSession(session);
     setLoginNotice(null);
     setShowProfileMenu(false);
@@ -283,10 +473,6 @@ export default function KelokraApp() {
     }
 
     if (session.accountId) {
-      setStoreSettings((prev) => ({
-        ...prev,
-        storeName: session.storeName || prev.storeName,
-      }));
       setAccounts((prev) =>
         prev.map((a) =>
           a.id === session.accountId
@@ -352,6 +538,18 @@ export default function KelokraApp() {
       // Ignore storage error
     }
 
+    loadedTenantRef.current = null;
+    setActiveTenantId(null);
+    setProducts(INITIAL_PRODUCTS);
+    setSales(INITIAL_SALES);
+    setMovements(INITIAL_STOCK_MOVEMENTS);
+    setSuppliers(INITIAL_SUPPLIERS);
+    setPurchases(INITIAL_PURCHASES);
+    setReturns(INITIAL_RETURNS);
+    setCustomers(INITIAL_CUSTOMERS);
+    setExpenses(INITIAL_EXPENSES);
+    setShifts(INITIAL_SHIFTS);
+    setStoreSettings(INITIAL_STORE_SETTINGS);
     setAuthSession(null);
     setShowProfileMenu(false);
     setMobileMenuOpen(false);
@@ -741,19 +939,45 @@ export default function KelokraApp() {
     !activeAccountTime.isExpired &&
     activeAccountTime.totalDaysLeft <= 7;
 
-  // Reusable Account & Backup handlers
+  // Reusable Account & Backup handlers (credential-free export + validated restore)
   const handleExportBackup = () => {
+    const tenantId = activeTenantId || DEFAULT_TENANT_ID;
+    const safeStoreAccountsMeta = accounts
+      .filter(
+        (a) =>
+          currentRole === "SUPER_ADMIN" ||
+          a.id === tenantId ||
+          a.parentOwnerId === tenantId
+      )
+      .map(
+        ({
+          passwordHash: _h,
+          passwordSalt: _s,
+          password: _p,
+          ...safeMeta
+        }) => {
+          void _h;
+          void _s;
+          void _p;
+          return safeMeta;
+        }
+      );
+
     const payload = {
+      schemaVersion: "kelokra-backup-v2",
       exportedAt: new Date().toISOString(),
-      tenantId: DEFAULT_TENANT_ID,
+      tenantId,
       storeSettings,
       products,
       sales,
       movements,
       suppliers,
+      purchases,
+      returns,
       customers,
       expenses,
-      accounts,
+      shifts,
+      accountsMeta: safeStoreAccountsMeta,
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], {
       type: "application/json",
@@ -765,6 +989,82 @@ export default function KelokraApp() {
     a.click();
     URL.revokeObjectURL(url);
     showToast("Backup data penjualan & toko (.JSON) berhasil diunduh!");
+  };
+
+  const handleImportBackup = (
+    jsonText: string
+  ): { ok: boolean; message: string } => {
+    try {
+      const parsedRaw = JSON.parse(jsonText);
+      const parsed = sanitizeJsonObject(parsedRaw) as Record<string, unknown>;
+      if (
+        !parsed ||
+        typeof parsed !== "object" ||
+        !Array.isArray(parsed.products) ||
+        !Array.isArray(parsed.sales)
+      ) {
+        return {
+          ok: false,
+          message:
+            "File backup tidak valid: struktur products atau sales tidak ditemukan.",
+        };
+      }
+
+      setProducts(parsed.products as Product[]);
+      setSales(parsed.sales as SaleTransaction[]);
+      if (Array.isArray(parsed.movements)) {
+        setMovements(parsed.movements as StockMovement[]);
+      }
+      if (Array.isArray(parsed.suppliers)) {
+        setSuppliers(parsed.suppliers as Supplier[]);
+      }
+      if (Array.isArray(parsed.purchases)) {
+        setPurchases(parsed.purchases as PurchaseOrder[]);
+      }
+      if (Array.isArray(parsed.returns)) {
+        setReturns(parsed.returns as ReturnRecord[]);
+      }
+      if (Array.isArray(parsed.customers)) {
+        setCustomers(parsed.customers as Customer[]);
+      }
+      if (Array.isArray(parsed.expenses)) {
+        setExpenses(parsed.expenses as ExpenseRecord[]);
+      }
+      if (Array.isArray(parsed.shifts)) {
+        setShifts(parsed.shifts as CashShiftRecord[]);
+      }
+      if (parsed.storeSettings && typeof parsed.storeSettings === "object") {
+        const incomingSettings = parsed.storeSettings as Partial<StoreSettings>;
+        const safeQrisUrl =
+          typeof incomingSettings.qrisImageDataUrl === "string" &&
+          /^data:image\/(png|jpeg|jpg|webp);base64,/i.test(
+            incomingSettings.qrisImageDataUrl
+          )
+            ? incomingSettings.qrisImageDataUrl
+            : "";
+        setStoreSettings({
+          ...INITIAL_STORE_SETTINGS,
+          ...incomingSettings,
+          qrisImageDataUrl: safeQrisUrl,
+        });
+      }
+
+      appendAudit(
+        "BACKUP_RESTORED",
+        "Backup",
+        `Memulihkan ${parsed.products.length} produk dan ${parsed.sales.length} transaksi dari file backup JSON.`
+      );
+      showToast("Data backup toko berhasil dipulihkan!");
+      return {
+        ok: true,
+        message: `Berhasil memulihkan ${parsed.products.length} produk & ${parsed.sales.length} transaksi.`,
+      };
+    } catch {
+      return {
+        ok: false,
+        message: "Gagal membaca file backup: format JSON rusak atau tidak sesuai.",
+      };
+    }
   };
 
   const handleCreateAccountsBatch = (newAccounts: ManagedAccount[]) => {
@@ -818,9 +1118,69 @@ export default function KelokraApp() {
     showToast("Status aktif akun diperbarui!");
   };
 
+  const handleResetAccountPassword = (
+    accountId: string,
+    passwordHash: string,
+    passwordSalt: string
+  ) => {
+    const target = accounts.find((a) => a.id === accountId);
+    setAccounts((prev) =>
+      prev.map((a) => {
+        if (a.id !== accountId) return a;
+        const { password: _legacy, ...clean } = a;
+        void _legacy;
+        return { ...clean, passwordHash, passwordSalt };
+      })
+    );
+    if (target) {
+      appendAudit(
+        "ACCOUNT_PASSWORD_RESET",
+        "Super Admin",
+        `Password akun @${target.username} berhasil direset dan dienkripsi ulang.`
+      );
+    }
+    showToast("Password akun berhasil direset & diamankan!");
+  };
+
   const handleDeleteAccount = (accountId: string) => {
-    setAccounts((prev) => prev.filter((a) => a.id !== accountId));
-    showToast("Akun berhasil dihapus oleh Super Admin.");
+    const target = accounts.find((a) => a.id === accountId);
+    if (!target) return;
+
+    if (target.role === "OWNER") {
+      setAccounts((prev) =>
+        prev.filter(
+          (a) =>
+            a.id !== accountId &&
+            !(
+              a.role === "CASHIER" &&
+              (a.parentOwnerId === accountId ||
+                (!a.parentOwnerId &&
+                  a.storeName.toLowerCase() === target.storeName.toLowerCase()))
+            )
+        )
+      );
+      try {
+        localStorage.removeItem(`${TENANT_STORE_PREFIX}${accountId}`);
+      } catch {
+        // Ignore storage error
+      }
+      appendAudit(
+        "OWNER_CASCADE_DELETED",
+        "Super Admin",
+        `Super Admin menghapus Owner @${target.username} (${target.storeName}) beserta seluruh akun kasir dan data tokonya.`
+      );
+      showToast(
+        `Akun Owner "${target.storeName}" & seluruh kasirnya berhasil dihapus.`
+      );
+    } else {
+      setAccounts((prev) => prev.filter((a) => a.id !== accountId));
+      appendAudit(
+        "CASHIER_DELETED",
+        "Super Admin",
+        `Super Admin menghapus akun Kasir @${target.username}.`
+      );
+      showToast(`Akun Kasir @${target.username} berhasil dihapus.`);
+    }
   };
 
   // Strict RBAC Navigation Items
@@ -1369,12 +1729,25 @@ export default function KelokraApp() {
             (currentRole === "SUPER_ADMIN" ? (
               <SuperAdminDashboardView
                 userName={currentUserName}
-                accounts={accounts}
+                accounts={
+                currentRole === "SUPER_ADMIN"
+                  ? accounts
+                  : accounts.filter(
+                      (a) =>
+                        a.id === activeTenantId ||
+                        a.parentOwnerId === activeTenantId ||
+                        (!a.parentOwnerId &&
+                          activeAccount?.storeName &&
+                          a.storeName.toLowerCase() ===
+                            activeAccount.storeName.toLowerCase())
+                    )
+              }
                 onNavigate={setActiveMenu}
                 onCreateAccountsBatch={handleCreateAccountsBatch}
                 onExtendAccount={handleExtendAccount}
                 onToggleAccountStatus={handleToggleAccountStatus}
                 onDeleteAccount={handleDeleteAccount}
+                onResetAccountPassword={handleResetAccountPassword}
               />
             ) : (
               <DashboardView
@@ -1514,7 +1887,19 @@ export default function KelokraApp() {
             <SaasSettingsAdminView
               mode={activeMenu}
               userRole={currentRole}
-              accounts={accounts}
+              accounts={
+                currentRole === "SUPER_ADMIN"
+                  ? accounts
+                  : accounts.filter(
+                      (a) =>
+                        a.id === activeTenantId ||
+                        a.parentOwnerId === activeTenantId ||
+                        (!a.parentOwnerId &&
+                          activeAccount?.storeName &&
+                          a.storeName.toLowerCase() ===
+                            activeAccount.storeName.toLowerCase())
+                    )
+              }
               storeSettings={storeSettings}
               auditLogs={auditLogs}
               onNavigate={setActiveMenu}
@@ -1522,13 +1907,23 @@ export default function KelokraApp() {
               onExtendAccount={handleExtendAccount}
               onToggleAccountStatus={handleToggleAccountStatus}
               onDeleteAccount={handleDeleteAccount}
+              onResetAccountPassword={handleResetAccountPassword}
               onUpdateSettings={(next) => {
                 setStoreSettings(next);
                 showToast("Pengaturan & metode pembayaran berhasil disimpan!");
               }}
               onExportBackup={handleExportBackup}
+              onImportBackup={handleImportBackup}
               onResetAllData={() => {
-                localStorage.removeItem(STORAGE_KEY);
+                if (activeTenantId && activeTenantId !== "SUPER_ADMIN_GLOBAL") {
+                  try {
+                    localStorage.removeItem(
+                      `${TENANT_STORE_PREFIX}${activeTenantId}`
+                    );
+                  } catch {
+                    // Ignore storage error
+                  }
+                }
                 setProducts([]);
                 setSales([]);
                 setMovements([]);
@@ -1538,10 +1933,21 @@ export default function KelokraApp() {
                 setCustomers([]);
                 setExpenses([]);
                 setShifts([]);
-                setAccounts([]);
-                setAuditLogs([]);
-                setStoreSettings(INITIAL_STORE_SETTINGS);
-                showToast("Seluruh data berhasil dikosongkan!");
+                setStoreSettings({
+                  ...INITIAL_STORE_SETTINGS,
+                  storeName:
+                    activeAccount?.storeName || INITIAL_STORE_SETTINGS.storeName,
+                });
+                appendAudit(
+                  "STORE_DATA_RESET",
+                  "Backup",
+                  `Data operasional toko ${
+                    activeAccount?.storeName || ""
+                  } dikosongkan.`
+                );
+                showToast(
+                  "Data operasional toko dikosongkan (akun login tetap aman)."
+                );
               }}
             />
           )}

@@ -24,6 +24,7 @@ import {
 } from "@/types/nextpos";
 import { WEEKLY_REPORT_CHART } from "@/lib/initial-data";
 import { formatIDR, generateId } from "@/lib/format";
+import { clampNonNegative, sanitizeCsvCell } from "@/lib/security";
 
 interface ReportsFinanceViewProps {
   mode: "reports" | "finance" | "customers";
@@ -129,15 +130,25 @@ export function ReportsFinanceView({
     const headers = [
       "No Invoice,Tanggal,Pelanggan,Kasir,Metode,Subtotal,Diskon,Grand Total,HPP,Laba Bersih",
     ];
-    const rows = sales.map(
-      (s) =>
-        `${s.invoiceNumber},${s.createdAt},"${s.customerName}","${s.cashierName}",${s.paymentMethod},${s.subtotal},${s.discountTotal},${s.grandTotal},${s.totalHpp},${s.netProfit}`
+    const rows = sales.map((s) =>
+      [
+        sanitizeCsvCell(s.invoiceNumber),
+        sanitizeCsvCell(s.createdAt),
+        sanitizeCsvCell(s.customerName),
+        sanitizeCsvCell(s.cashierName),
+        sanitizeCsvCell(s.paymentMethod),
+        sanitizeCsvCell(s.subtotal),
+        sanitizeCsvCell(s.discountTotal),
+        sanitizeCsvCell(s.grandTotal),
+        sanitizeCsvCell(s.totalHpp),
+        sanitizeCsvCell(s.netProfit),
+      ].join(",")
     );
-    const csvContent =
-      "data:text/csv;charset=utf-8," + [headers, ...rows].join("\n");
-    const encodedUri = encodeURI(csvContent);
+    const csvContent = "\uFEFF" + [headers, ...rows].join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
+    link.setAttribute("href", url);
     link.setAttribute(
       "download",
       `Laporan-KELOKRA-${new Date().toISOString().slice(0, 10)}.csv`
@@ -145,6 +156,7 @@ export function ReportsFinanceView({
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   // ============================================================================
@@ -673,12 +685,13 @@ export function ReportsFinanceView({
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
-                  if (!expDesc.trim()) return;
+                  const safeAmount = clampNonNegative(Number(expAmount));
+                  if (!expDesc.trim() || safeAmount <= 0) return;
                   onAddExpense({
                     id: generateId("exp"),
                     category: expCategory,
                     description: expDesc.trim(),
-                    amount: Number(expAmount),
+                    amount: safeAmount,
                     date: new Date().toLocaleDateString("id-ID"),
                     recordedBy: "Owner",
                   });
@@ -726,9 +739,10 @@ export function ReportsFinanceView({
                   </label>
                   <input
                     type="number"
+                    min={1}
                     required
                     value={expAmount}
-                    onChange={(e) => setExpAmount(Number(e.target.value))}
+                    onChange={(e) => setExpAmount(clampNonNegative(Number(e.target.value)))}
                     className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 font-bold"
                   />
                 </div>
@@ -770,7 +784,7 @@ export function ReportsFinanceView({
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
-                  onToggleShift(Number(shiftCashAmount), shiftNotes);
+                  onToggleShift(clampNonNegative(Number(shiftCashAmount)), shiftNotes);
                   setShowShiftModal(false);
                 }}
                 className="space-y-3.5 text-sm"
@@ -783,9 +797,10 @@ export function ReportsFinanceView({
                   </label>
                   <input
                     type="number"
+                    min={0}
                     required
                     value={shiftCashAmount}
-                    onChange={(e) => setShiftCashAmount(Number(e.target.value))}
+                    onChange={(e) => setShiftCashAmount(clampNonNegative(Number(e.target.value)))}
                     className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 font-bold"
                   />
                 </div>

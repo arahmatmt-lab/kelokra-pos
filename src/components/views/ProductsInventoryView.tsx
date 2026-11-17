@@ -26,6 +26,7 @@ import {
   Supplier,
 } from "@/types/nextpos";
 import { formatIDR, generateId } from "@/lib/format";
+import { clampNonNegative, clampPositiveInt } from "@/lib/security";
 import { ProductVisual } from "@/components/ProductVisual";
 
 interface ProductsInventoryViewProps {
@@ -67,6 +68,7 @@ export function ProductsInventoryView({
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [showProductModal, setShowProductModal] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [confirmDeleteProduct, setConfirmDeleteProduct] = useState<Product | null>(null);
 
   // Form states for Product
   const [prodName, setProdName] = useState("");
@@ -177,10 +179,10 @@ export function ProductsInventoryView({
       sku: prodSku.trim().toUpperCase(),
       barcode: prodBarcode.trim(),
       category: prodCategory,
-      purchasePrice: Number(prodPurchasePrice),
-      sellingPrice: Number(prodSellingPrice),
-      stock: Number(prodStock),
-      minStock: Number(prodMinStock),
+      purchasePrice: clampNonNegative(Number(prodPurchasePrice)),
+      sellingPrice: clampNonNegative(Number(prodSellingPrice)),
+      stock: clampNonNegative(Math.floor(Number(prodStock))),
+      minStock: clampNonNegative(Math.floor(Number(prodMinStock))),
       unit: prodUnit,
       image: prodImage,
       soldCount: editingProduct ? editingProduct.soldCount : 0,
@@ -195,7 +197,11 @@ export function ProductsInventoryView({
     e.preventDefault();
     const targetId = opnameProductId || products[0]?.id;
     if (!targetId || !opnameReason.trim()) return;
-    onPerformOpname(targetId, Number(opnameActualQty), opnameReason.trim());
+    onPerformOpname(
+      targetId,
+      clampNonNegative(Math.floor(Number(opnameActualQty))),
+      opnameReason.trim()
+    );
     setShowOpnameModal(false);
   };
 
@@ -205,7 +211,9 @@ export function ProductsInventoryView({
     const prod = products.find((p) => p.id === targetProdId);
     if (!prod || !poSupplierName.trim()) return;
 
-    const subtotal = poQty * poUnitCost;
+    const safeQty = clampPositiveInt(Number(poQty), 1);
+    const safeUnitCost = clampNonNegative(Number(poUnitCost));
+    const subtotal = safeQty * safeUnitCost;
     const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
     const newPo: PurchaseOrder = {
       id: generateId("po"),
@@ -216,8 +224,8 @@ export function ProductsInventoryView({
         {
           productId: prod.id,
           productName: prod.name,
-          quantity: Number(poQty),
-          unitCost: Number(poUnitCost),
+          quantity: safeQty,
+          unitCost: safeUnitCost,
           subtotal,
         },
       ],
@@ -254,6 +262,7 @@ export function ProductsInventoryView({
     const prod = products.find((p) => p.id === targetProdId);
     if (!prod) return;
 
+    const safeQty = clampPositiveInt(Number(returnQty), 1);
     const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
     const newRet: ReturnRecord = {
       id: generateId("ret"),
@@ -262,11 +271,11 @@ export function ProductsInventoryView({
       referenceNumber: returnRef.trim() || "INV-MANUAL",
       productId: prod.id,
       productName: prod.name,
-      quantity: Number(returnQty),
+      quantity: safeQty,
       refundAmount:
         returnType === "CUSTOMER_RETURN"
-          ? prod.sellingPrice * Number(returnQty)
-          : prod.purchasePrice * Number(returnQty),
+          ? prod.sellingPrice * safeQty
+          : prod.purchasePrice * safeQty,
       reason: returnReason,
       restockEligible:
         returnType === "CUSTOMER_RETURN" ? restockEligible : false,
@@ -441,7 +450,7 @@ export function ProductsInventoryView({
                           <Edit3 className="w-4 h-4" />
                         </button>
                         <button
-                          onClick={() => onDeleteProduct(product.id)}
+                          onClick={() => setConfirmDeleteProduct(product)}
                           title="Hapus Produk"
                           className="p-1.5 rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition"
                         >
@@ -571,10 +580,11 @@ export function ProductsInventoryView({
                     </label>
                     <input
                       type="number"
+                      min={0}
                       required
                       value={prodPurchasePrice}
                       onChange={(e) =>
-                        setProdPurchasePrice(Number(e.target.value))
+                        setProdPurchasePrice(clampNonNegative(Number(e.target.value)))
                       }
                       className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-emerald-500"
                     />
@@ -585,10 +595,11 @@ export function ProductsInventoryView({
                     </label>
                     <input
                       type="number"
+                      min={0}
                       required
                       value={prodSellingPrice}
                       onChange={(e) =>
-                        setProdSellingPrice(Number(e.target.value))
+                        setProdSellingPrice(clampNonNegative(Number(e.target.value)))
                       }
                       className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-emerald-500"
                     />
@@ -602,9 +613,10 @@ export function ProductsInventoryView({
                     </label>
                     <input
                       type="number"
+                      min={0}
                       required
                       value={prodStock}
-                      onChange={(e) => setProdStock(Number(e.target.value))}
+                      onChange={(e) => setProdStock(clampNonNegative(Math.floor(Number(e.target.value))))}
                       className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-emerald-500"
                     />
                   </div>
@@ -614,9 +626,10 @@ export function ProductsInventoryView({
                     </label>
                     <input
                       type="number"
+                      min={0}
                       required
                       value={prodMinStock}
-                      onChange={(e) => setProdMinStock(Number(e.target.value))}
+                      onChange={(e) => setProdMinStock(clampNonNegative(Math.floor(Number(e.target.value))))}
                       className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-emerald-500"
                     />
                   </div>
@@ -933,9 +946,10 @@ export function ProductsInventoryView({
                   </label>
                   <input
                     type="number"
+                    min={0}
                     required
                     value={opnameActualQty}
-                    onChange={(e) => setOpnameActualQty(Number(e.target.value))}
+                    onChange={(e) => setOpnameActualQty(clampNonNegative(Math.floor(Number(e.target.value))))}
                     className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 font-bold"
                   />
                 </div>
@@ -1362,7 +1376,7 @@ export function ProductsInventoryView({
                     required
                     min={1}
                     value={poQty}
-                    onChange={(e) => setPoQty(Number(e.target.value))}
+                    onChange={(e) => setPoQty(clampPositiveInt(Number(e.target.value), 1))}
                     className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200"
                   />
                 </div>
@@ -1372,9 +1386,10 @@ export function ProductsInventoryView({
                   </label>
                   <input
                     type="number"
+                    min={0}
                     required
                     value={poUnitCost}
-                    onChange={(e) => setPoUnitCost(Number(e.target.value))}
+                    onChange={(e) => setPoUnitCost(clampNonNegative(Number(e.target.value)))}
                     className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200"
                   />
                 </div>
@@ -1455,7 +1470,7 @@ export function ProductsInventoryView({
                     min={1}
                     required
                     value={returnQty}
-                    onChange={(e) => setReturnQty(Number(e.target.value))}
+                    onChange={(e) => setReturnQty(clampPositiveInt(Number(e.target.value), 1))}
                     className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200"
                   />
                 </div>
@@ -1517,6 +1532,47 @@ export function ProductsInventoryView({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* CONFIRM DELETE PRODUCT MODAL */}
+      {confirmDeleteProduct && (
+        <div className="fixed inset-0 z-50 bg-navy-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-extrabold text-navy-800">
+                  Hapus Produk?
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  Produk <b>{confirmDeleteProduct.name}</b> (SKU:{" "}
+                  {confirmDeleteProduct.sku}) akan dihapus permanen dari katalog.
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-3 pt-1">
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteProduct(null)}
+                className="flex-1 py-2.5 rounded-xl border border-slate-200 font-bold text-slate-600 text-xs"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onDeleteProduct(confirmDeleteProduct.id);
+                  setConfirmDeleteProduct(null);
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs"
+              >
+                Ya, Hapus Produk
+              </button>
+            </div>
           </div>
         </div>
       )}

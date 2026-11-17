@@ -173,7 +173,9 @@ export interface ManagedAccount {
   id: string;
   name: string;
   username: string;
-  password: string;
+  passwordHash: string;
+  passwordSalt: string;
+  password?: string; // Legacy migration only; never persisted for new accounts
   email: string;
   role: "OWNER" | "CASHIER";
   ownerMode?: OwnerAccountMode;

@@ -25,6 +25,11 @@ interface SuperAdminDashboardViewProps {
   onExtendAccount: (accountId: string, addMonths: number) => void;
   onToggleAccountStatus: (accountId: string) => void;
   onDeleteAccount: (accountId: string) => void;
+  onResetAccountPassword?: (
+    accountId: string,
+    passwordHash: string,
+    passwordSalt: string
+  ) => void;
 }
 
 const MONTH_LABELS = [
@@ -50,6 +55,7 @@ export function SuperAdminDashboardView({
   onExtendAccount,
   onToggleAccountStatus,
   onDeleteAccount,
+  onResetAccountPassword,
 }: SuperAdminDashboardViewProps) {
   const [selectedYear, setSelectedYear] = useState<number>(
     new Date().getFullYear()
@@ -515,6 +521,7 @@ export function SuperAdminDashboardView({
         onExtendAccount={onExtendAccount}
         onToggleAccountStatus={onToggleAccountStatus}
         onDeleteAccount={onDeleteAccount}
+        onResetAccountPassword={onResetAccountPassword}
       />
     </div>
   );

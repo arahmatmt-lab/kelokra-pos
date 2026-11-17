@@ -34,6 +34,7 @@ import {
   StoreSettings,
 } from "@/types/nextpos";
 import { formatIDR, generateId } from "@/lib/format";
+import { clampNonNegative, escapeHtml } from "@/lib/security";
 import { ProductVisual } from "@/components/ProductVisual";
 
 interface PosViewProps {
@@ -190,7 +191,7 @@ export function PosView({
       sum + item.product.sellingPrice * item.quantity - item.discount,
     0
   );
-  const effectiveDiscount = Math.min(cartDiscount, subtotal);
+  const effectiveDiscount = Math.min(clampNonNegative(cartDiscount), subtotal);
   const afterDiscount = Math.max(0, subtotal - effectiveDiscount);
   const taxTotal = storeSettings.enableTax
     ? Math.round((afterDiscount * storeSettings.taxPercentage) / 100)
@@ -247,7 +248,21 @@ export function PosView({
     activeTransferChannels[0];
 
   const finalizeCheckout = async () => {
+    if (isProcessingPayment || cart.length === 0) return;
     setCheckoutError(null);
+
+    // Re-check live inventory before finalizing payment to prevent overselling
+    for (const item of cart) {
+      const liveProd = products.find((p) => p.id === item.product.id);
+      if (!liveProd || liveProd.stock < item.quantity) {
+        setCheckoutError(
+          `Stok "${item.product.name}" tidak mencukupi (tersisa ${
+            liveProd ? liveProd.stock : 0
+          }). Kurangi jumlah di keranjang.`
+        );
+        return;
+      }
+    }
 
     if (!isOnline && paymentMethod === "QRIS") {
       setCheckoutError(
@@ -256,7 +271,10 @@ export function PosView({
       return;
     }
 
-    if (paymentMethod === "Tunai" && cashReceivedInput < grandTotal) {
+    if (
+      paymentMethod === "Tunai" &&
+      (!Number.isFinite(cashReceivedInput) || cashReceivedInput < grandTotal)
+    ) {
       setCheckoutError(
         "Nominal uang tunai yang diterima kurang dari total tagihan."
       );
@@ -360,16 +378,17 @@ export function PosView({
   const handlePrintThermalReceipt = (tx: SaleTransaction) => {
     const printWin = window.open("", "_blank", "width=380,height=640");
     if (!printWin) return;
+    printWin.opener = null;
     const widthCss = storeSettings.printerPaperSize === "58mm" ? "58mm" : "80mm";
     const itemsHtml = tx.items
       .map(
         (item) => `
         <tr>
-          <td colspan="2" style="padding-top:4px;font-weight:600;">${item.productName}</td>
+          <td colspan="2" style="padding-top:4px;font-weight:600;">${escapeHtml(item.productName)}</td>
         </tr>
         <tr>
-          <td style="color:#475569;">${item.quantity} x ${formatIDR(item.unitPrice)}</td>
-          <td style="text-align:right;font-weight:600;">${formatIDR(item.subtotal)}</td>
+          <td style="color:#475569;">${escapeHtml(item.quantity)} x ${escapeHtml(formatIDR(item.unitPrice))}</td>
+          <td style="text-align:right;font-weight:600;">${escapeHtml(formatIDR(item.subtotal))}</td>
         </tr>`
       )
       .join("");
@@ -377,7 +396,7 @@ export function PosView({
     printWin.document.write(`
       <html>
         <head>
-          <title>Struk ${tx.invoiceNumber}</title>
+          <title>Struk ${escapeHtml(tx.invoiceNumber)}</title>
           <style>
             body { font-family: 'Courier New', monospace; width: ${widthCss}; margin: 0 auto; padding: 12px; font-size: 12px; color: #0F2933; }
             .center { text-align: center; }
@@ -387,36 +406,36 @@ export function PosView({
         </head>
         <body>
           <div class="center">
-            <h3 style="margin:0;font-size:15px;">${storeSettings.storeName}</h3>
-            <p style="margin:2px 0;font-size:11px;">${storeSettings.address}</p>
-            <p style="margin:2px 0;font-size:11px;">Telp: ${storeSettings.phone}</p>
+            <h3 style="margin:0;font-size:15px;">${escapeHtml(storeSettings.storeName)}</h3>
+            <p style="margin:2px 0;font-size:11px;">${escapeHtml(storeSettings.address)}</p>
+            <p style="margin:2px 0;font-size:11px;">Telp: ${escapeHtml(storeSettings.phone)}</p>
           </div>
           <div class="divider"></div>
-          <p style="margin:2px 0;">No: <b>${tx.invoiceNumber}</b></p>
-          <p style="margin:2px 0;">Kasir: ${tx.cashierName}</p>
-          <p style="margin:2px 0;">Pelanggan: ${tx.customerName}</p>
-          <p style="margin:2px 0;">Metode: ${tx.paymentDetail || tx.paymentMethod}</p>
+          <p style="margin:2px 0;">No: <b>${escapeHtml(tx.invoiceNumber)}</b></p>
+          <p style="margin:2px 0;">Kasir: ${escapeHtml(tx.cashierName)}</p>
+          <p style="margin:2px 0;">Pelanggan: ${escapeHtml(tx.customerName)}</p>
+          <p style="margin:2px 0;">Metode: ${escapeHtml(tx.paymentDetail || tx.paymentMethod)}</p>
           <div class="divider"></div>
           <table>${itemsHtml}</table>
           <div class="divider"></div>
           <table>
-            <tr><td>Subtotal</td><td style="text-align:right;">${formatIDR(tx.subtotal)}</td></tr>
-            <tr><td>Diskon</td><td style="text-align:right;">- ${formatIDR(tx.discountTotal)}</td></tr>
+            <tr><td>Subtotal</td><td style="text-align:right;">${escapeHtml(formatIDR(tx.subtotal))}</td></tr>
+            <tr><td>Diskon</td><td style="text-align:right;">- ${escapeHtml(formatIDR(tx.discountTotal))}</td></tr>
             ${
               tx.taxTotal > 0
-                ? `<tr><td>Pajak</td><td style="text-align:right;">${formatIDR(tx.taxTotal)}</td></tr>`
+                ? `<tr><td>Pajak</td><td style="text-align:right;">${escapeHtml(formatIDR(tx.taxTotal))}</td></tr>`
                 : ""
             }
             <tr style="font-size:14px;font-weight:bold;">
               <td style="padding-top:4px;">TOTAL</td>
-              <td style="text-align:right;padding-top:4px;">${formatIDR(tx.grandTotal)}</td>
+              <td style="text-align:right;padding-top:4px;">${escapeHtml(formatIDR(tx.grandTotal))}</td>
             </tr>
-            <tr><td>Bayar (${tx.paymentMethod})</td><td style="text-align:right;">${formatIDR(tx.cashReceived)}</td></tr>
-            <tr><td>Kembali</td><td style="text-align:right;">${formatIDR(tx.changeAmount)}</td></tr>
+            <tr><td>Bayar (${escapeHtml(tx.paymentMethod)})</td><td style="text-align:right;">${escapeHtml(formatIDR(tx.cashReceived))}</td></tr>
+            <tr><td>Kembali</td><td style="text-align:right;">${escapeHtml(formatIDR(tx.changeAmount))}</td></tr>
           </table>
           <div class="divider"></div>
           <div class="center" style="font-size:11px;margin-top:8px;">
-            <p>${storeSettings.receiptFooter}</p>
+            <p>${escapeHtml(storeSettings.receiptFooter)}</p>
             <p style="margin-top:4px;color:#64748B;">Powered by KELOKRA</p>
           </div>
           <script>window.onload = () => { window.print(); }</script>
@@ -918,8 +937,9 @@ export function PosView({
                 </label>
                 <input
                   type="number"
+                  min={0}
                   value={cashReceivedInput}
-                  onChange={(e) => setCashReceivedInput(Number(e.target.value))}
+                  onChange={(e) => setCashReceivedInput(clampNonNegative(Number(e.target.value)))}
                   className="w-full px-4 py-3 rounded-xl border border-slate-200 text-lg font-extrabold text-navy-800 focus:outline-none focus:border-emerald-500"
                 />
                 <div className="grid grid-cols-4 gap-2">

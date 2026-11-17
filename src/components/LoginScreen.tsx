@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   ArrowRight,
   CheckCircle2,
@@ -11,10 +11,10 @@ import {
   Sparkles,
   User,
   AlertCircle,
-  Clock,
 } from "lucide-react";
 import { AuthSession, ManagedAccount } from "@/types/nextpos";
 import { getRemainingTimeInfo } from "@/lib/format";
+import { verifyPasswordWithSalt } from "@/lib/security";
 
 interface LoginScreenProps {
   accounts: ManagedAccount[];
@@ -22,6 +22,9 @@ interface LoginScreenProps {
   externalNotice?: string | null;
   onLoginSuccess: (session: AuthSession) => void;
 }
+
+const MAX_FAILED_ATTEMPTS = 5;
+const LOCKOUT_SECONDS = 30;
 
 export function LoginScreen({
   accounts,
@@ -35,8 +38,35 @@ export function LoginScreen({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Brute-force protection state
+  const [failedCount, setFailedCount] = useState(0);
+  const [lockSecondsLeft, setLockSecondsLeft] = useState(0);
+
+  useEffect(() => {
+    if (lockSecondsLeft <= 0) return;
+    const timer = setTimeout(() => {
+      setLockSecondsLeft((s) => Math.max(0, s - 1));
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [lockSecondsLeft]);
+
+  const recordFailure = (msg: string) => {
+    const next = failedCount + 1;
+    setFailedCount(next);
+    if (next >= MAX_FAILED_ATTEMPTS) {
+      setLockSecondsLeft(LOCKOUT_SECONDS);
+      setFailedCount(0);
+      setErrorMsg(
+        `Terlalu banyak percobaan login gagal. Coba lagi dalam ${LOCKOUT_SECONDS} detik.`
+      );
+    } else {
+      setErrorMsg(msg);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (lockSecondsLeft > 0 || isSubmitting) return;
     setErrorMsg(null);
 
     const uname = username.trim().toLowerCase();
@@ -49,30 +79,23 @@ export function LoginScreen({
 
     setIsSubmitting(true);
 
-    let sessionToSet: AuthSession | null = null;
-
-    // 1. Cek Kredensial Super Admin Bawaan
-    if (uname === "superadmin" && pwd === "admin123") {
-      sessionToSet = {
-        userId: "super-admin-001",
-        username: "superadmin",
-        name: "Super Admin KELOKRA",
-        role: "SUPER_ADMIN",
-        accountId: null,
-        storeName: defaultStoreName,
-        loggedInAt: new Date().toISOString(),
-      };
-    } else {
-      // 2. Cek Akun Owner atau Kasir yang dibuat oleh Super Admin
-      const matched = accounts.find(
-        (a) => a.username.toLowerCase() === uname && a.password === pwd
-      );
-
-      if (!matched) {
-        setIsSubmitting(false);
-        setErrorMsg(
-          "Username atau password salah. Pastikan akun sudah dibuat oleh Super Admin."
+    // 1. Check Owner / Kasir accounts created by Super Admin (verified via salted SHA-256)
+    const matched = accounts.find((a) => a.username.toLowerCase() === uname);
+    if (matched) {
+      let validPwd = false;
+      if (matched.passwordHash && matched.passwordSalt) {
+        validPwd = await verifyPasswordWithSalt(
+          pwd,
+          matched.passwordHash,
+          matched.passwordSalt
         );
+      } else if (matched.password) {
+        validPwd = matched.password === pwd;
+      }
+
+      if (!validPwd) {
+        setIsSubmitting(false);
+        recordFailure("Username atau password salah.");
         return;
       }
 
@@ -89,7 +112,7 @@ export function LoginScreen({
         return;
       }
 
-      sessionToSet = {
+      const sessionToSet: AuthSession = {
         userId: matched.id,
         username: matched.username,
         name: matched.name,
@@ -99,25 +122,64 @@ export function LoginScreen({
         storeName: matched.storeName || defaultStoreName,
         loggedInAt: new Date().toISOString(),
       };
+
+      try {
+        await fetch("/api/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            username: sessionToSet.username,
+            role: sessionToSet.role,
+            accountId: sessionToSet.accountId,
+          }),
+        });
+      } catch {
+        // Offline PWA fallback
+      }
+
+      setIsSubmitting(false);
+      setFailedCount(0);
+      onLoginSuccess(sessionToSet);
+      return;
     }
 
-    // Set HttpOnly cookie session via API
+    // 2. Otherwise verify Super Admin strictly on the server (no hardcoded client password)
     try {
-      await fetch("/api/auth/login", {
+      const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          username: sessionToSet.username,
-          role: sessionToSet.role,
-          accountId: sessionToSet.accountId,
+          username: uname,
+          password: pwd,
+          role: "SUPER_ADMIN",
         }),
       });
-    } catch {
-      // Fallback safely if offline PWA mode
-    }
 
-    setIsSubmitting(false);
-    onLoginSuccess(sessionToSet);
+      if (!res.ok) {
+        setIsSubmitting(false);
+        recordFailure("Username atau password salah.");
+        return;
+      }
+
+      const sessionToSet: AuthSession = {
+        userId: "super-admin-001",
+        username: uname,
+        name: "Super Admin KELOKRA",
+        role: "SUPER_ADMIN",
+        accountId: null,
+        storeName: defaultStoreName,
+        loggedInAt: new Date().toISOString(),
+      };
+
+      setIsSubmitting(false);
+      setFailedCount(0);
+      onLoginSuccess(sessionToSet);
+    } catch {
+      setIsSubmitting(false);
+      setErrorMsg(
+        "Gagal menghubungi server autentikasi. Periksa koneksi internet Anda."
+      );
+    }
   };
 
   return (
@@ -154,18 +216,18 @@ export function LoginScreen({
               </li>
               <li className="flex items-center gap-2.5">
                 <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span>Validasi Masa Aktif Akun Otomatis</span>
+                <span>Password Terenkripsi (Salted SHA-256)</span>
               </li>
               <li className="flex items-center gap-2.5">
                 <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span>Dukungan POS QRIS, M-Banking & Offline PWA</span>
+                <span>Proteksi Brute-Force & Cookie Tertandatangani</span>
               </li>
             </ul>
           </div>
 
           <div className="pt-8 z-10 text-[11px] text-slate-400 flex items-center gap-1.5">
             <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
-            <span>Sesi Login Aman dengan Cookie HttpOnly</span>
+            <span>Sesi Login Aman dengan Signed Cookie HttpOnly</span>
           </div>
         </div>
 
@@ -198,11 +260,13 @@ export function LoginScreen({
                   <input
                     type="text"
                     autoFocus
+                    autoComplete="username"
                     required
+                    disabled={lockSecondsLeft > 0}
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
                     placeholder="Masukkan username..."
-                    className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 bg-slate-50/60 text-sm text-[#0F2933] focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500 focus:bg-white transition"
+                    className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 bg-slate-50/60 text-sm text-[#0F2933] focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500 focus:bg-white transition disabled:opacity-60"
                   />
                 </div>
               </div>
@@ -215,11 +279,13 @@ export function LoginScreen({
                   <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                   <input
                     type={showPassword ? "text" : "password"}
+                    autoComplete="current-password"
                     required
+                    disabled={lockSecondsLeft > 0}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="Masukkan password..."
-                    className="w-full pl-10 pr-11 py-3 rounded-xl border border-slate-200 bg-slate-50/60 text-sm text-[#0F2933] focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500 focus:bg-white transition"
+                    className="w-full pl-10 pr-11 py-3 rounded-xl border border-slate-200 bg-slate-50/60 text-sm text-[#0F2933] focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500 focus:bg-white transition disabled:opacity-60"
                   />
                   <button
                     type="button"
@@ -243,81 +309,36 @@ export function LoginScreen({
               {errorMsg && (
                 <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-xs font-bold text-rose-600 flex items-start gap-2">
                   <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                  <span>{errorMsg}</span>
+                  <span>
+                    {lockSecondsLeft > 0
+                      ? `Terlalu banyak percobaan gagal. Silakan tunggu ${lockSecondsLeft} detik.`
+                      : errorMsg}
+                  </span>
                 </div>
               )}
 
               <button
                 type="submit"
-                disabled={isSubmitting}
+                disabled={isSubmitting || lockSecondsLeft > 0}
                 className="w-full py-3.5 px-5 rounded-xl bg-[#10B981] hover:bg-emerald-600 disabled:bg-slate-300 text-white font-extrabold text-sm shadow-md transition flex items-center justify-center gap-2"
               >
-                <span>{isSubmitting ? "Memeriksa Akun..." : "Login Sekarang"}</span>
+                <span>
+                  {lockSecondsLeft > 0
+                    ? `Terkunci (${lockSecondsLeft}d)`
+                    : isSubmitting
+                    ? "Memeriksa Akun..."
+                    : "Login Sekarang"}
+                </span>
                 <ArrowRight className="w-4 h-4" />
               </button>
             </form>
 
-            {/* Info Akses Super Admin Default */}
-            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-2.5">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <p className="text-xs font-extrabold text-[#0F2933]">
-                    Akses Super Admin Pertama Kali
-                  </p>
-                  <p className="text-[11px] text-slate-500 mt-0.5">
-                    Username: <code className="font-bold text-emerald-700">superadmin</code> • Password:{" "}
-                    <code className="font-bold text-emerald-700">admin123</code>
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setUsername("superadmin");
-                    setPassword("admin123");
-                    setErrorMsg(null);
-                  }}
-                  className="px-3 py-1.5 rounded-lg bg-[#0F2933] hover:bg-emerald-600 text-white text-[11px] font-bold transition"
-                >
-                  Isi Otomatis
-                </button>
-              </div>
-
-              {accounts.length > 0 && (
-                <div className="pt-2 border-t border-slate-200/80 space-y-1.5">
-                  <p className="text-[11px] font-bold text-slate-500">
-                    Akun Owner & Kasir Terdaftar (Klik untuk isi username):
-                  </p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {accounts.map((acc) => {
-                      const t = getRemainingTimeInfo(acc.expiresAt);
-                      return (
-                        <button
-                          key={acc.id}
-                          type="button"
-                          onClick={() => {
-                            setUsername(acc.username);
-                            setPassword("");
-                            setErrorMsg(null);
-                          }}
-                          className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:border-emerald-500 text-[11px] font-semibold text-[#0F2933] inline-flex items-center gap-1.5 transition"
-                        >
-                          <span
-                            className={`w-1.5 h-1.5 rounded-full ${
-                              acc.status === "AKTIF" && !t.isExpired
-                                ? "bg-emerald-500"
-                                : "bg-rose-500"
-                            }`}
-                          />
-                          <span>
-                            @{acc.username} ({acc.role === "OWNER" ? "Owner" : "Kasir"})
-                          </span>
-                          <Clock className="w-3 h-3 text-slate-400" />
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
+            <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200/80 text-[11px] text-slate-500 leading-relaxed">
+              <b className="text-[#0F2933]">Catatan Keamanan:</b> Kredensial
+              Super Admin diverifikasi di server (dapat diatur lewat environment
+              variable <code className="bg-slate-200/70 px-1 rounded">SUPER_ADMIN_USERNAME</code>{" "}
+              & <code className="bg-slate-200/70 px-1 rounded">SUPER_ADMIN_PASSWORD</code>{" "}
+              di Vercel). Akun Owner & Kasir dibuat dari panel Super Admin.
             </div>
           </div>
 

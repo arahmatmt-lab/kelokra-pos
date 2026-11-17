@@ -24,6 +24,9 @@ import {
   Eye,
   UserPlus,
   Info,
+  AlertTriangle,
+  Copy,
+  Check,
   X,
 } from "lucide-react";
 import {
@@ -40,6 +43,11 @@ import {
   generateId,
   getRemainingTimeInfo,
 } from "@/lib/format";
+import {
+  ALLOWED_QRIS_IMAGE_TYPES,
+  clampPositiveInt,
+  hashPasswordWithSalt,
+} from "@/lib/security";
 import { StoreAccountDetailModal } from "@/components/StoreAccountDetailModal";
 
 interface SaasSettingsAdminViewProps {
@@ -57,8 +65,14 @@ interface SaasSettingsAdminViewProps {
   onExtendAccount: (accountId: string, addMonths: number) => void;
   onToggleAccountStatus: (accountId: string) => void;
   onDeleteAccount: (accountId: string) => void;
+  onResetAccountPassword?: (
+    accountId: string,
+    passwordHash: string,
+    passwordSalt: string
+  ) => void;
   onUpdateSettings: (next: StoreSettings) => void;
   onExportBackup: () => void;
+  onImportBackup?: (jsonText: string) => { ok: boolean; message: string };
   onResetAllData: () => void;
   onNavigate?: (menu: string) => void;
 }
@@ -73,8 +87,10 @@ export function SaasSettingsAdminView({
   onExtendAccount,
   onToggleAccountStatus,
   onDeleteAccount,
+  onResetAccountPassword,
   onUpdateSettings,
   onExportBackup,
+  onImportBackup,
   onResetAllData,
   onNavigate,
 }: SaasSettingsAdminViewProps) {
@@ -112,16 +128,43 @@ export function SaasSettingsAdminView({
   const [selectedParentOwnerId, setSelectedParentOwnerId] =
     useState<string>("");
   const [accError, setAccError] = useState<string | null>(null);
+  const [isCreatingAccounts, setIsCreatingAccounts] = useState(false);
+
+  // One-time credential card after Super Admin creates accounts
+  const [createdCredentialsOnce, setCreatedCredentialsOnce] = useState<
+    { role: string; name: string; username: string; password: string }[] | null
+  >(null);
+  const [copiedBatchCreds, setCopiedBatchCreds] = useState(false);
+
+  // Payment / Security / Data confirmation states
+  const [qrisError, setQrisError] = useState<string | null>(null);
+  const [confirmDeleteChannelId, setConfirmDeleteChannelId] = useState<
+    string | null
+  >(null);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [backupFeedback, setBackupFeedback] = useState<{
+    ok: boolean;
+    message: string;
+  } | null>(null);
 
   // Selected Owner for Eye Icon Detail Modal
   const [detailOwner, setDetailOwner] = useState<ManagedAccount | null>(null);
 
-  // Handle QRIS image upload to Base64 Data URL
+  // Handle QRIS image upload to Base64 Data URL (SVG blocked to prevent XSS)
   const handleQrisFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setQrisError(null);
     const file = e.target.files?.[0];
     if (!file) return;
+    if (!ALLOWED_QRIS_IMAGE_TYPES.has(file.type)) {
+      setQrisError(
+        "Format gambar tidak diizinkan. Upload PNG, JPG, JPEG, atau WebP saja (SVG ditolak demi keamanan)."
+      );
+      e.target.value = "";
+      return;
+    }
     if (file.size > 2 * 1024 * 1024) {
-      alert("Ukuran gambar QRIS maksimal 2 MB.");
+      setQrisError("Ukuran gambar QRIS maksimal 2 MB.");
+      e.target.value = "";
       return;
     }
     const reader = new FileReader();
@@ -319,7 +362,7 @@ export function SaasSettingsAdminView({
                 </span>
                 <input
                   type="file"
-                  accept="image/*"
+                  accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
                   onChange={handleQrisFileUpload}
                   className="hidden"
                 />
@@ -340,6 +383,9 @@ export function SaasSettingsAdminView({
                 </button>
               )}
             </div>
+            {qrisError && (
+              <p className="text-xs font-bold text-rose-600">{qrisError}</p>
+            )}
             <p className="text-[11px] text-slate-400">
               Format yang didukung: PNG, JPG, JPEG, WebP (maks. 2 MB).
             </p>
@@ -447,14 +493,36 @@ export function SaasSettingsAdminView({
                     >
                       <Edit3 className="w-3.5 h-3.5" />
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteChannel(ch.id)}
-                      title="Hapus"
-                      className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-50"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    {confirmDeleteChannelId === ch.id ? (
+                      <div className="inline-flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handleDeleteChannel(ch.id);
+                            setConfirmDeleteChannelId(null);
+                          }}
+                          className="px-2 py-1 rounded-lg bg-rose-600 text-white text-[10px] font-bold"
+                        >
+                          Hapus?
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteChannelId(null)}
+                          className="px-2 py-1 rounded-lg bg-slate-200 text-slate-600 text-[10px] font-bold"
+                        >
+                          Batal
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteChannelId(ch.id)}
+                        title="Hapus"
+                        className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-50"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1126,24 +1194,97 @@ export function SaasSettingsAdminView({
                   Backup & Pemulihan Data
                 </h2>
                 <p className="text-xs text-slate-500">
-                  Unduh seluruh data produk, stok, transaksi, dan pengaturan dalam format JSON, atau kosongkan seluruh data lokal.
+                  Unduh atau pulihkan data produk, stok, transaksi, dan pengaturan toko dalam format JSON yang tervalidasi (kredensial login tetap terlindungi).
                 </p>
                 <div className="flex flex-wrap gap-3">
                   <button
+                    type="button"
                     onClick={onExportBackup}
                     className="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold flex items-center gap-2"
                   >
                     <Download className="w-4 h-4" />
                     <span>Unduh Backup Data (.JSON)</span>
                   </button>
+                  {onImportBackup && (
+                    <label className="cursor-pointer px-4 py-2.5 rounded-xl bg-navy-800 hover:bg-navy-900 text-white text-xs font-bold flex items-center gap-2">
+                      <Upload className="w-4 h-4" />
+                      <span>Pulihkan / Restore (.JSON)</span>
+                      <input
+                        type="file"
+                        accept=".json,application/json"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+                          const reader = new FileReader();
+                          reader.onload = () => {
+                            if (typeof reader.result === "string") {
+                              const res = onImportBackup(reader.result);
+                              setBackupFeedback(res);
+                            }
+                          };
+                          reader.readAsText(file);
+                          e.target.value = "";
+                        }}
+                      />
+                    </label>
+                  )}
                   <button
-                    onClick={onResetAllData}
+                    type="button"
+                    onClick={() => setShowResetConfirm(true)}
                     className="px-4 py-2.5 rounded-xl border border-rose-200 text-rose-600 hover:bg-rose-50 text-xs font-bold flex items-center gap-2"
                   >
                     <RotateCcw className="w-4 h-4" />
-                    <span>Kosongkan Seluruh Data</span>
+                    <span>Kosongkan Data Toko</span>
                   </button>
                 </div>
+
+                {backupFeedback && (
+                  <div
+                    className={`p-3 rounded-xl text-xs font-bold border ${
+                      backupFeedback.ok
+                        ? "bg-emerald-50 border-emerald-200 text-emerald-800"
+                        : "bg-rose-50 border-rose-200 text-rose-700"
+                    }`}
+                  >
+                    {backupFeedback.message}
+                  </div>
+                )}
+
+                {showResetConfirm && (
+                  <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 space-y-3">
+                    <div className="flex items-start gap-2.5">
+                      <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                      <div className="text-xs space-y-1">
+                        <p className="font-extrabold text-rose-900">
+                          Konfirmasi Kosongkan Data Operasional Toko
+                        </p>
+                        <p className="text-rose-800">
+                          Produk, riwayat transaksi penjualan, stok, dan pengeluaran pada toko aktif ini akan dikosongkan. Akun login Owner/Kasir tetap aman. Disarankan unduh backup terlebih dahulu.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowResetConfirm(false)}
+                        className="px-3.5 py-1.5 rounded-xl bg-white border border-slate-200 text-slate-600 text-xs font-bold"
+                      >
+                        Batal
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onResetAllData();
+                          setShowResetConfirm(false);
+                        }}
+                        className="px-4 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold"
+                      >
+                        Ya, Kosongkan Data Toko
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1247,12 +1388,17 @@ export function SaasSettingsAdminView({
     setShowAccountModal(true);
   };
 
-  const handleCreateAccountSubmit = (e: React.FormEvent) => {
+  const handleCreateAccountSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setAccError(null);
 
     if (!accName.trim() || !accUsername.trim() || !accPassword.trim()) {
       setAccError("Nama, Username, dan Password wajib diisi.");
+      return;
+    }
+
+    if (accPassword.trim().length < 6) {
+      setAccError("Password Owner minimal 6 karakter demi keamanan akun.");
       return;
     }
 
@@ -1266,102 +1412,149 @@ export function SaasSettingsAdminView({
     }
 
     const nowIso = new Date().toISOString();
-    const months = Math.max(1, Number(accDurationMonths) || 1);
+    const months = Math.min(120, clampPositiveInt(Number(accDurationMonths), 1));
     const expiresIso = addMonthsToIso(nowIso, months);
     const storeLabel = accStoreName.trim() || storeSettings.storeName;
 
-    if (accRole === "OWNER") {
-      const ownerId = generateId("acc");
-      const createdBatch: ManagedAccount[] = [
-        {
-          id: ownerId,
-          name: accName.trim(),
-          username: normalizedOwnerUname,
-          password: accPassword,
-          email: accEmail.trim() || "-",
-          role: "OWNER",
-          ownerMode: accOwnerMode,
-          storeName: storeLabel,
-          durationMonths: months,
-          createdAt: nowIso,
-          expiresAt: expiresIso,
-          status: "AKTIF",
-          avatarColor: "#10B981",
-          lastLogin: "Belum pernah login",
-        },
-      ];
-
-      if (accOwnerMode === "OWNER_PLUS_KASIR") {
-        const usedUsernames = new Set<string>([
-          normalizedOwnerUname,
-          ...accounts.map((a) => a.username.toLowerCase()),
-        ]);
-
-        for (let i = 0; i < cashierDrafts.length; i++) {
-          const draft = cashierDrafts[i];
-          if (
-            !draft.name.trim() ||
-            !draft.username.trim() ||
-            !draft.password.trim()
-          ) {
-            setAccError(
-              `Nama, Username, dan Password untuk Kasir ${i + 1} wajib diisi.`
-            );
-            return;
-          }
-          const cUname = draft.username.trim().toLowerCase();
-          if (usedUsernames.has(cUname)) {
-            setAccError(
-              `Username kasir "${draft.username}" sudah digunakan atau duplikat.`
-            );
-            return;
-          }
-          usedUsernames.add(cUname);
-
-          createdBatch.push({
-            id: generateId("acc"),
-            name: draft.name.trim(),
-            username: cUname,
-            password: draft.password,
-            email: "-",
-            role: "CASHIER",
-            parentOwnerId: ownerId,
+    setIsCreatingAccounts(true);
+    try {
+      if (accRole === "OWNER") {
+        const ownerId = generateId("acc");
+        const ownerHash = await hashPasswordWithSalt(accPassword);
+        const createdBatch: ManagedAccount[] = [
+          {
+            id: ownerId,
+            name: accName.trim(),
+            username: normalizedOwnerUname,
+            passwordHash: ownerHash.passwordHash,
+            passwordSalt: ownerHash.passwordSalt,
+            email: accEmail.trim() || "-",
+            role: "OWNER",
+            ownerMode: accOwnerMode,
             storeName: storeLabel,
             durationMonths: months,
             createdAt: nowIso,
             expiresAt: expiresIso,
             status: "AKTIF",
-            avatarColor: "#0EA5E9",
+            avatarColor: "#10B981",
             lastLogin: "Belum pernah login",
-          });
+          },
+        ];
+        const onceSummary: {
+          role: string;
+          name: string;
+          username: string;
+          password: string;
+        }[] = [
+          {
+            role: "Owner",
+            name: accName.trim(),
+            username: normalizedOwnerUname,
+            password: accPassword,
+          },
+        ];
+
+        if (accOwnerMode === "OWNER_PLUS_KASIR") {
+          const usedUsernames = new Set<string>([
+            normalizedOwnerUname,
+            ...accounts.map((a) => a.username.toLowerCase()),
+          ]);
+
+          for (let i = 0; i < cashierDrafts.length; i++) {
+            const draft = cashierDrafts[i];
+            if (
+              !draft.name.trim() ||
+              !draft.username.trim() ||
+              !draft.password.trim()
+            ) {
+              setAccError(
+                `Nama, Username, dan Password untuk Kasir ${i + 1} wajib diisi.`
+              );
+              return;
+            }
+            if (draft.password.trim().length < 6) {
+              setAccError(
+                `Password Kasir ${i + 1} minimal 6 karakter demi keamanan akun.`
+              );
+              return;
+            }
+            const cUname = draft.username.trim().toLowerCase();
+            if (usedUsernames.has(cUname)) {
+              setAccError(
+                `Username kasir "${draft.username}" sudah digunakan atau duplikat.`
+              );
+              return;
+            }
+            usedUsernames.add(cUname);
+
+            const cHash = await hashPasswordWithSalt(draft.password);
+            createdBatch.push({
+              id: generateId("acc"),
+              name: draft.name.trim(),
+              username: cUname,
+              passwordHash: cHash.passwordHash,
+              passwordSalt: cHash.passwordSalt,
+              email: "-",
+              role: "CASHIER",
+              parentOwnerId: ownerId,
+              storeName: storeLabel,
+              durationMonths: months,
+              createdAt: nowIso,
+              expiresAt: expiresIso,
+              status: "AKTIF",
+              avatarColor: "#0EA5E9",
+              lastLogin: "Belum pernah login",
+            });
+            onceSummary.push({
+              role: "Kasir",
+              name: draft.name.trim(),
+              username: cUname,
+              password: draft.password,
+            });
+          }
         }
+
+        onCreateAccountsBatch(createdBatch);
+        setCreatedCredentialsOnce(onceSummary);
+        setCopiedBatchCreds(false);
+      } else {
+        const parentOwner = accounts.find(
+          (a) => a.role === "OWNER" && a.id === selectedParentOwnerId
+        );
+        const cHash = await hashPasswordWithSalt(accPassword);
+        const newCashier: ManagedAccount = {
+          id: generateId("acc"),
+          name: accName.trim(),
+          username: normalizedOwnerUname,
+          passwordHash: cHash.passwordHash,
+          passwordSalt: cHash.passwordSalt,
+          email: accEmail.trim() || "-",
+          role: "CASHIER",
+          parentOwnerId: parentOwner?.id,
+          storeName: parentOwner ? parentOwner.storeName : storeLabel,
+          durationMonths: parentOwner ? parentOwner.durationMonths : months,
+          createdAt: nowIso,
+          expiresAt: parentOwner ? parentOwner.expiresAt : expiresIso,
+          status: "AKTIF",
+          avatarColor: "#0EA5E9",
+          lastLogin: "Belum pernah login",
+        };
+        onCreateAccountsBatch([newCashier]);
+        setCreatedCredentialsOnce([
+          {
+            role: "Kasir",
+            name: newCashier.name,
+            username: normalizedOwnerUname,
+            password: accPassword,
+          },
+        ]);
+        setCopiedBatchCreds(false);
       }
 
-      onCreateAccountsBatch(createdBatch);
-    } else {
-      const parentOwner = accounts.find(
-        (a) => a.role === "OWNER" && a.id === selectedParentOwnerId
-      );
-      const newCashier: ManagedAccount = {
-        id: generateId("acc"),
-        name: accName.trim(),
-        username: normalizedOwnerUname,
-        password: accPassword,
-        email: accEmail.trim() || "-",
-        role: "CASHIER",
-        parentOwnerId: parentOwner?.id,
-        storeName: parentOwner ? parentOwner.storeName : storeLabel,
-        durationMonths: parentOwner ? parentOwner.durationMonths : months,
-        createdAt: nowIso,
-        expiresAt: parentOwner ? parentOwner.expiresAt : expiresIso,
-        status: "AKTIF",
-        avatarColor: "#0EA5E9",
-        lastLogin: "Belum pernah login",
-      };
-      onCreateAccountsBatch([newCashier]);
+      setShowAccountModal(false);
+    } finally {
+      setIsCreatingAccounts(false);
     }
-
-    setShowAccountModal(false);
   };
 
   return (
@@ -1459,6 +1652,76 @@ export function SaasSettingsAdminView({
           </p>
         </div>
       </div>
+
+      {/* One-time Credential Display Card */}
+      {createdCredentialsOnce && createdCredentialsOnce.length > 0 && (
+        <div className="p-5 rounded-2xl bg-emerald-50 border border-emerald-300 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-emerald-900 font-extrabold text-sm">
+              <ShieldCheck className="w-5 h-5 text-emerald-600 shrink-0" />
+              <span>
+                Kredensial Akun Baru (Tampil 1 Kali — Simpan Sekarang)
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const text = createdCredentialsOnce
+                    .map(
+                      (c) =>
+                        `[${c.role}] ${c.name} -> Username: ${c.username} | Password: ${c.password}`
+                    )
+                    .join("\n");
+                  navigator.clipboard?.writeText(text).catch(() => {});
+                  setCopiedBatchCreds(true);
+                }}
+                className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold inline-flex items-center gap-1"
+              >
+                {copiedBatchCreds ? (
+                  <>
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Semua Tersalin</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5" />
+                    <span>Salin Semua Kredensial</span>
+                  </>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => setCreatedCredentialsOnce(null)}
+                className="px-3 py-1.5 rounded-xl bg-white border border-emerald-200 text-emerald-800 text-xs font-bold"
+              >
+                Tutup
+              </button>
+            </div>
+          </div>
+          <p className="text-xs text-emerald-900/80">
+            Password telah dienkripsi menggunakan SHA-256 + salt dan tidak dapat dilihat lagi setelah kartu ini ditutup (gunakan tombol Reset Password di detail toko jika lupa).
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            {createdCredentialsOnce.map((c, idx) => (
+              <div
+                key={idx}
+                className="p-3 rounded-xl bg-white border border-emerald-200 text-xs font-mono text-navy-800 flex flex-wrap items-center justify-between gap-2"
+              >
+                <div>
+                  <span className="font-sans font-bold text-emerald-700 mr-1.5">
+                    [{c.role}]
+                  </span>
+                  <span className="font-sans font-semibold">{c.name}</span>
+                </div>
+                <div>
+                  @<b>{c.username}</b> / <b>{c.password}</b>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Accounts Table (Sama dengan Catatan Langganan: Nama Toko | Type Akun | Mulai Langganan | Jenis Durasi | Sisa Waktu | Icon Mata) */}
       <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-card space-y-4">
@@ -1756,7 +2019,7 @@ export function SaasSettingsAdminView({
                     required
                     value={accPassword}
                     onChange={(e) => setAccPassword(e.target.value)}
-                    placeholder="Minimal 4 karakter"
+                    placeholder="Minimal 6 karakter"
                     className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200"
                   />
                 </div>
@@ -1795,7 +2058,9 @@ export function SaasSettingsAdminView({
                     required
                     value={accDurationMonths}
                     onChange={(e) =>
-                      setAccDurationMonths(Number(e.target.value))
+                      setAccDurationMonths(
+                        Math.min(120, clampPositiveInt(Number(e.target.value), 1))
+                      )
                     }
                     className="w-28 px-3.5 py-2 rounded-xl border border-slate-200 font-bold text-center"
                   />
@@ -1954,9 +2219,12 @@ export function SaasSettingsAdminView({
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-bold"
+                  disabled={isCreatingAccounts}
+                  className="flex-1 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 disabled:opacity-60 text-white font-bold"
                 >
-                  Simpan & Aktifkan Akun
+                  {isCreatingAccounts
+                    ? "Mengenkripsi Akun..."
+                    : "Simpan & Aktifkan Akun"}
                 </button>
               </div>
             </form>
@@ -1973,6 +2241,7 @@ export function SaasSettingsAdminView({
         onExtendAccount={onExtendAccount}
         onToggleAccountStatus={onToggleAccountStatus}
         onDeleteAccount={onDeleteAccount}
+        onResetAccountPassword={onResetAccountPassword}
       />
     </div>
   );
