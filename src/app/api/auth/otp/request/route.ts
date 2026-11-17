@@ -130,7 +130,11 @@ export async function POST(req: NextRequest) {
     if (gmailUser && gmailAppPassword) {
       try {
         const transporter = nodemailer.createTransport({
-          service: "gmail",
+          host: "smtp.gmail.com",
+          port: 465,
+          secure: true,
+          connectionTimeout: 10000,
+          greetingTimeout: 10000,
           auth: {
             user: gmailUser,
             pass: gmailAppPassword,
@@ -170,11 +174,15 @@ export async function POST(req: NextRequest) {
         });
 
         deliveryMode = "GMAIL_SMTP";
-      } catch {
+      } catch (smtpErr) {
+        console.error(
+          "Gmail SMTP error:",
+          smtpErr instanceof Error ? smtpErr.message : smtpErr
+        );
         return NextResponse.json(
           {
             error:
-              "Gagal mengirim email via Gmail SMTP. Periksa GMAIL_USER dan GMAIL_APP_PASSWORD pada konfigurasi server.",
+              "Gagal mengirim email via Gmail SMTP. Periksa GMAIL_USER dan GMAIL_APP_PASSWORD (16 huruf Sandi Aplikasi) pada konfigurasi server.",
           },
           { status: 502 }
         );
