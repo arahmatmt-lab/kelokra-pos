@@ -20,7 +20,10 @@ interface LoginScreenProps {
   accounts: ManagedAccount[];
   defaultStoreName: string;
   externalNotice?: string | null;
-  onLoginSuccess: (session: AuthSession) => void;
+  onLoginSuccess: (
+    session: AuthSession,
+    meta?: { cloudMode?: boolean; tenantId?: string | null }
+  ) => void;
 }
 
 const MAX_FAILED_ATTEMPTS = 5;
@@ -79,72 +82,12 @@ export function LoginScreen({
 
     setIsSubmitting(true);
 
-    // 1. Check Owner / Kasir accounts created by Super Admin (verified via salted SHA-256)
-    const matched = accounts.find((a) => a.username.toLowerCase() === uname);
-    if (matched) {
-      let validPwd = false;
-      if (matched.passwordHash && matched.passwordSalt) {
-        validPwd = await verifyPasswordWithSalt(
-          pwd,
-          matched.passwordHash,
-          matched.passwordSalt
-        );
-      } else if (matched.password) {
-        validPwd = matched.password === pwd;
-      }
-
-      if (!validPwd) {
-        setIsSubmitting(false);
-        recordFailure("Username atau password salah.");
-        return;
-      }
-
-      const timeInfo = getRemainingTimeInfo(matched.expiresAt);
-      if (matched.status !== "AKTIF" || timeInfo.isExpired) {
-        setIsSubmitting(false);
-        setErrorMsg(
-          `Akun "${matched.name}" tidak dapat masuk karena ${
-            timeInfo.isExpired
-              ? "masa aktif telah habis"
-              : "status akun sedang dinonaktifkan"
-          }. Hubungi Super Admin untuk perpanjangan.`
-        );
-        return;
-      }
-
-      const sessionToSet: AuthSession = {
-        userId: matched.id,
-        username: matched.username,
-        name: matched.name,
-        role: matched.role,
-        ownerMode: matched.ownerMode,
-        accountId: matched.id,
-        storeName: matched.storeName || defaultStoreName,
-        loggedInAt: new Date().toISOString(),
-      };
-
-      // Sync HttpOnly cookie in background so UI transition is instantaneous (works offline too)
-      fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        keepalive: true,
-        body: JSON.stringify({
-          username: sessionToSet.username,
-          role: sessionToSet.role,
-          accountId: sessionToSet.accountId,
-        }),
-      }).catch(() => {});
-
-      setIsSubmitting(false);
-      setFailedCount(0);
-      onLoginSuccess(sessionToSet);
-      return;
-    }
-
-    // 2. Otherwise verify Super Admin strictly on the server (no hardcoded client password)
+    // 1. Try server-side auth first (authenticates Super Admin + Neon Cloud Owner/Kasir across all devices)
+    let cloudConfigured = false;
+    let networkError = false;
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      const timeoutId = setTimeout(() => controller.abort(), 12000);
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -152,35 +95,119 @@ export function LoginScreen({
         body: JSON.stringify({
           username: uname,
           password: pwd,
-          role: "SUPER_ADMIN",
         }),
       });
       clearTimeout(timeoutId);
 
-      if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      cloudConfigured = Boolean(data.cloudConfigured);
+
+      if (res.ok && data.success && data.session) {
         setIsSubmitting(false);
-        recordFailure("Username atau password salah.");
+        setFailedCount(0);
+        onLoginSuccess(
+          {
+            ...data.session,
+            storeName: data.session.storeName || defaultStoreName,
+          },
+          {
+            cloudMode: data.mode === "cloud",
+            tenantId: data.tenantId || null,
+          }
+        );
         return;
       }
 
-      const sessionToSet: AuthSession = {
-        userId: "super-admin-001",
-        username: uname,
-        name: "Super Admin KELOKRA",
-        role: "SUPER_ADMIN",
-        accountId: null,
-        storeName: defaultStoreName,
-        loggedInAt: new Date().toISOString(),
-      };
+      if (res.status === 403 || res.status === 429) {
+        setIsSubmitting(false);
+        setErrorMsg(
+          data.error || "Akun tidak dapat masuk saat ini. Hubungi Super Admin."
+        );
+        return;
+      }
 
-      setIsSubmitting(false);
-      setFailedCount(0);
-      onLoginSuccess(sessionToSet);
+      if (cloudConfigured && res.status === 401) {
+        setIsSubmitting(false);
+        recordFailure(data.error || "Username atau password salah.");
+        return;
+      }
     } catch {
-      setIsSubmitting(false);
+      networkError = true;
+    }
+
+    // 2. Local / Offline fallback (used when DATABASE_URL is not configured or device is offline)
+    if (!cloudConfigured || networkError) {
+      const matched = accounts.find((a) => a.username.toLowerCase() === uname);
+      if (matched) {
+        let validPwd = false;
+        if (matched.passwordHash && matched.passwordSalt) {
+          validPwd = await verifyPasswordWithSalt(
+            pwd,
+            matched.passwordHash,
+            matched.passwordSalt
+          );
+        } else if (matched.password) {
+          validPwd = matched.password === pwd;
+        }
+
+        if (!validPwd) {
+          setIsSubmitting(false);
+          recordFailure("Username atau password salah.");
+          return;
+        }
+
+        const timeInfo = getRemainingTimeInfo(matched.expiresAt);
+        if (matched.status !== "AKTIF" || timeInfo.isExpired) {
+          setIsSubmitting(false);
+          setErrorMsg(
+            `Akun "${matched.name}" tidak dapat masuk karena ${
+              timeInfo.isExpired
+                ? "masa aktif telah habis"
+                : "status akun sedang dinonaktifkan"
+            }. Hubungi Super Admin untuk perpanjangan.`
+          );
+          return;
+        }
+
+        const sessionToSet: AuthSession = {
+          userId: matched.id,
+          username: matched.username,
+          name: matched.name,
+          role: matched.role,
+          ownerMode: matched.ownerMode,
+          accountId: matched.id,
+          storeName: matched.storeName || defaultStoreName,
+          loggedInAt: new Date().toISOString(),
+        };
+
+        if (!networkError) {
+          fetch("/api/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            keepalive: true,
+            body: JSON.stringify({
+              username: sessionToSet.username,
+              role: sessionToSet.role,
+              accountId: sessionToSet.accountId,
+              tenantId: matched.parentOwnerId || matched.id,
+            }),
+          }).catch(() => {});
+        }
+
+        setIsSubmitting(false);
+        setFailedCount(0);
+        onLoginSuccess(sessionToSet, { cloudMode: false });
+        return;
+      }
+    }
+
+    setIsSubmitting(false);
+    if (networkError) {
       setErrorMsg(
         "Gagal menghubungi server autentikasi. Periksa koneksi internet Anda."
       );
+    } else {
+      recordFailure("Username atau password salah.");
     }
   };
 

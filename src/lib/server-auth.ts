@@ -14,6 +14,7 @@ export interface SignedSessionPayload {
   username: string;
   role: "SUPER_ADMIN" | "OWNER" | "CASHIER";
   accountId: string | null;
+  tenantId?: string | null;
   issuedAt: string;
   exp: number;
 }

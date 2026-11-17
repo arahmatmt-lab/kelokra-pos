@@ -132,6 +132,13 @@ export default function KelokraApp() {
   const [activeTenantId, setActiveTenantId] = useState<string | null>(null);
   const loadedTenantRef = useRef<string | null>(null);
 
+  // Neon PostgreSQL Cloud Sync State
+  const [isCloudConfigured, setIsCloudConfigured] = useState(false);
+  const isCloudRef = useRef(false);
+  const cloudTenantHydratedRef = useRef<string | null>(null);
+  const lastSyncedPayloadRef = useRef<string>("");
+  const tenantSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Core Business Domain States (Initialized Empty per Tenant)
   const [products, setProducts] = useState<Product[]>(INITIAL_PRODUCTS);
   const [sales, setSales] = useState<SaleTransaction[]>(INITIAL_SALES);
@@ -264,7 +271,188 @@ export default function KelokraApp() {
     });
   };
 
-  // Load persisted accounts, migrate legacy plaintext passwords, and restore tenant state
+  const postCloudPlatform = async (payload: Record<string, unknown>) => {
+    if (!isCloudRef.current) return;
+    try {
+      const res = await fetch("/api/cloud/platform", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        if (errData?.error) {
+          showToast(errData.error);
+        }
+        return;
+      }
+      setLastSyncTime(formatShortTime());
+    } catch {
+      // Keep optimistic local state when offline
+    }
+  };
+
+  const hydratePlatformFromCloud = async (
+    role: string,
+    localFallback?: {
+      accounts: ManagedAccount[];
+      feedbacks: DeveloperFeedback[];
+      auditLogs: AuditLogEntry[];
+      adminWhatsapp: string;
+    }
+  ) => {
+    try {
+      const res = await fetch("/api/cloud/platform", { cache: "no-store" });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data?.cloudConfigured) return;
+
+      const cloudAccounts = Array.isArray(data.accounts)
+        ? (data.accounts as ManagedAccount[])
+        : [];
+      const cloudFeedbacks = Array.isArray(data.feedbacks)
+        ? (data.feedbacks as DeveloperFeedback[])
+        : [];
+      const cloudAuditLogs = Array.isArray(data.auditLogs)
+        ? (data.auditLogs as AuditLogEntry[])
+        : [];
+      const cloudWa =
+        typeof data.adminWhatsapp === "string" ? data.adminWhatsapp : "";
+
+      // One-time seamless migration of local-only accounts created before Neon was attached
+      if (
+        role === "SUPER_ADMIN" &&
+        cloudAccounts.length === 0 &&
+        localFallback &&
+        localFallback.accounts.length > 0
+      ) {
+        await postCloudPlatform({
+          action: "sync_bootstrap",
+          accounts: localFallback.accounts,
+          feedbacks: localFallback.feedbacks,
+          auditLogs: localFallback.auditLogs,
+          adminWhatsapp: localFallback.adminWhatsapp,
+        });
+        setLastSyncTime(formatShortTime());
+        return;
+      }
+
+      setAccounts(cloudAccounts);
+      if (role === "SUPER_ADMIN" || role === "OWNER") {
+        setFeedbacks(cloudFeedbacks);
+      }
+      if (role === "SUPER_ADMIN" && cloudAuditLogs.length > 0) {
+        setAuditLogs(cloudAuditLogs);
+      }
+      setAdminWhatsapp(cloudWa);
+      setLastSyncTime(formatShortTime());
+    } catch {
+      // Fall back to local state if offline
+    }
+  };
+
+  const hydrateTenantFromCloud = async (
+    tenantId: string,
+    storeNameHint?: string
+  ) => {
+    if (!tenantId || tenantId === "SUPER_ADMIN_GLOBAL") return;
+    cloudTenantHydratedRef.current = null;
+    try {
+      const res = await fetch(
+        `/api/cloud/tenant/${encodeURIComponent(tenantId)}`,
+        { cache: "no-store" }
+      );
+      if (!res.ok) {
+        cloudTenantHydratedRef.current = tenantId;
+        return;
+      }
+      const data = await res.json();
+      if (!data?.cloudConfigured) {
+        cloudTenantHydratedRef.current = tenantId;
+        return;
+      }
+
+      if (data.exists && data.store) {
+        const st = data.store;
+        const nextProducts = filterForTenant<Product>(st.products, tenantId);
+        const nextSales = filterForTenant<SaleTransaction>(st.sales, tenantId);
+        const nextMovements = filterForTenant<StockMovement>(
+          st.movements,
+          tenantId
+        );
+        const nextSuppliers = Array.isArray(st.suppliers)
+          ? (st.suppliers as Supplier[])
+          : [];
+        const nextPurchases = Array.isArray(st.purchases)
+          ? (st.purchases as PurchaseOrder[])
+          : [];
+        const nextReturns = Array.isArray(st.returns)
+          ? (st.returns as ReturnRecord[])
+          : [];
+        const nextCustomers = Array.isArray(st.customers)
+          ? (st.customers as Customer[])
+          : [];
+        const nextExpenses = Array.isArray(st.expenses)
+          ? (st.expenses as ExpenseRecord[])
+          : [];
+        const nextShifts = Array.isArray(st.shifts)
+          ? (st.shifts as CashShiftRecord[])
+          : [];
+        const nextSettings: StoreSettings = {
+          ...INITIAL_STORE_SETTINGS,
+          ...((st.storeSettings as Partial<StoreSettings>) || {}),
+          storeName:
+            (st.storeSettings as Partial<StoreSettings>)?.storeName ||
+            storeNameHint ||
+            INITIAL_STORE_SETTINGS.storeName,
+        };
+
+        const snapshot = JSON.stringify({
+          products: nextProducts,
+          sales: nextSales,
+          movements: nextMovements,
+          suppliers: nextSuppliers,
+          purchases: nextPurchases,
+          returns: nextReturns,
+          customers: nextCustomers,
+          expenses: nextExpenses,
+          shifts: nextShifts,
+          storeSettings: nextSettings,
+        });
+
+        lastSyncedPayloadRef.current = snapshot;
+        cloudTenantHydratedRef.current = tenantId;
+        loadedTenantRef.current = tenantId;
+        setActiveTenantId(tenantId);
+
+        setProducts(nextProducts);
+        setSales(nextSales);
+        setMovements(nextMovements);
+        setSuppliers(nextSuppliers);
+        setPurchases(nextPurchases);
+        setReturns(nextReturns);
+        setCustomers(nextCustomers);
+        setExpenses(nextExpenses);
+        setShifts(nextShifts);
+        setStoreSettings(nextSettings);
+
+        try {
+          localStorage.setItem(`${TENANT_STORE_PREFIX}${tenantId}`, snapshot);
+        } catch {
+          // Ignore quota error
+        }
+        setLastSyncTime(formatShortTime());
+      } else {
+        // First time this store connects to Neon -> mark ready so current store state pushes cleanly
+        lastSyncedPayloadRef.current = "";
+        cloudTenantHydratedRef.current = tenantId;
+      }
+    } catch {
+      cloudTenantHydratedRef.current = tenantId;
+    }
+  };
+
+  // Load persisted accounts, migrate legacy plaintext passwords, and restore server/local session
   useEffect(() => {
     let isCancelled = false;
 
@@ -375,37 +563,107 @@ export default function KelokraApp() {
         setFeedbacks(loadedFeedbacks);
         setAdminWhatsapp(loadedAdminWa);
 
-        const savedSession = localStorage.getItem(SESSION_STORAGE_KEY);
-        if (savedSession) {
-          const parsedSession = JSON.parse(savedSession) as AuthSession;
-          if (parsedSession.role === "SUPER_ADMIN") {
-            loadAndApplyTenantStore("SUPER_ADMIN_GLOBAL");
-            setAuthSession(parsedSession);
-            setActiveMenu("dashboard");
-          } else if (parsedSession.accountId) {
-            const matchedAcc = loadedAccounts.find(
-              (a) => a.id === parsedSession.accountId
-            );
-            if (
-              matchedAcc &&
-              matchedAcc.status === "AKTIF" &&
-              !getRemainingTimeInfo(matchedAcc.expiresAt).isExpired
-            ) {
-              const tid = resolveTenantId(parsedSession, loadedAccounts);
-              loadAndApplyTenantStore(
-                tid,
-                parsedSession.storeName,
-                legacyOperational
-              );
+        // Verify Neon Cloud availability & server HttpOnly session
+        let handledByCloud = false;
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 7000);
+          const sessionRes = await fetch("/api/auth/session", {
+            cache: "no-store",
+            signal: controller.signal,
+          });
+          clearTimeout(timeoutId);
+
+          if (sessionRes.ok) {
+            const sessionData = await sessionRes.json();
+            const cloudReady = Boolean(sessionData.cloudConfigured);
+            if (!isCancelled) {
+              setIsCloudConfigured(cloudReady);
+              isCloudRef.current = cloudReady;
+            }
+
+            if (cloudReady) {
+              handledByCloud = true;
+              if (sessionData.authenticated && sessionData.session) {
+                const srvSession = sessionData.session as AuthSession;
+                const tid =
+                  sessionData.tenantId ||
+                  resolveTenantId(srvSession, loadedAccounts);
+                loadAndApplyTenantStore(
+                  tid,
+                  srvSession.storeName,
+                  legacyOperational
+                );
+                await hydratePlatformFromCloud(srvSession.role, {
+                  accounts: loadedAccounts,
+                  feedbacks: loadedFeedbacks,
+                  auditLogs: loadedAuditLogs,
+                  adminWhatsapp: loadedAdminWa,
+                });
+                if (tid !== "SUPER_ADMIN_GLOBAL") {
+                  await hydrateTenantFromCloud(tid, srvSession.storeName);
+                }
+                if (!isCancelled) {
+                  setAuthSession(srvSession);
+                  setActiveMenu(
+                    srvSession.role === "CASHIER" ? "pos" : "dashboard"
+                  );
+                  try {
+                    localStorage.setItem(
+                      SESSION_STORAGE_KEY,
+                      JSON.stringify(srvSession)
+                    );
+                  } catch {
+                    // Ignore storage error
+                  }
+                }
+              } else {
+                localStorage.removeItem(SESSION_STORAGE_KEY);
+                if (sessionData.reason === "expired_or_disabled" && !isCancelled) {
+                  setLoginNotice(
+                    "Sesi Anda telah berakhir karena masa aktif akun habis atau dinonaktifkan oleh Super Admin."
+                  );
+                }
+              }
+            }
+          }
+        } catch {
+          // Offline or unreachable — fall back seamlessly to localStorage session
+        }
+
+        if (!handledByCloud && !isCancelled) {
+          const savedSession = localStorage.getItem(SESSION_STORAGE_KEY);
+          if (savedSession) {
+            const parsedSession = JSON.parse(savedSession) as AuthSession;
+            if (parsedSession.role === "SUPER_ADMIN") {
+              loadAndApplyTenantStore("SUPER_ADMIN_GLOBAL");
               setAuthSession(parsedSession);
-              setActiveMenu(
-                parsedSession.role === "CASHIER" ? "pos" : "dashboard"
+              setActiveMenu("dashboard");
+            } else if (parsedSession.accountId) {
+              const matchedAcc = loadedAccounts.find(
+                (a) => a.id === parsedSession.accountId
               );
-            } else {
-              localStorage.removeItem(SESSION_STORAGE_KEY);
-              setLoginNotice(
-                "Sesi Anda telah berakhir karena masa aktif akun habis atau dinonaktifkan oleh Super Admin."
-              );
+              if (
+                matchedAcc &&
+                matchedAcc.status === "AKTIF" &&
+                !getRemainingTimeInfo(matchedAcc.expiresAt).isExpired
+              ) {
+                const tid = resolveTenantId(parsedSession, loadedAccounts);
+                loadAndApplyTenantStore(
+                  tid,
+                  parsedSession.storeName,
+                  legacyOperational
+                );
+                setAuthSession(parsedSession);
+                setActiveMenu(
+                  parsedSession.role === "CASHIER" ? "pos" : "dashboard"
+                );
+              } else {
+                localStorage.removeItem(SESSION_STORAGE_KEY);
+                setLoginNotice(
+                  "Sesi Anda telah berakhir karena masa aktif akun habis atau dinonaktifkan oleh Super Admin."
+                );
+              }
             }
           }
         }
@@ -437,7 +695,7 @@ export default function KelokraApp() {
     };
   }, []);
 
-  // Save global accounts, audit logs, feedbacks, and admin WA number
+  // Save global accounts, audit logs, feedbacks, and admin WA number (local mirror)
   useEffect(() => {
     if (isAuthChecking) return;
     try {
@@ -455,7 +713,7 @@ export default function KelokraApp() {
     }
   }, [isAuthChecking, accounts, auditLogs, feedbacks, adminWhatsapp]);
 
-  // Save isolated operational data per Owner store
+  // Save isolated operational data per Owner store (local mirror + Neon Cloud PostgreSQL)
   useEffect(() => {
     if (
       isAuthChecking ||
@@ -465,25 +723,64 @@ export default function KelokraApp() {
     ) {
       return;
     }
+
+    const storePayload = {
+      products,
+      sales,
+      movements,
+      suppliers,
+      purchases,
+      returns,
+      customers,
+      expenses,
+      shifts,
+      storeSettings,
+    };
+    const serialized = JSON.stringify(storePayload);
+
     try {
-      localStorage.setItem(
-        `${TENANT_STORE_PREFIX}${activeTenantId}`,
-        JSON.stringify({
-          products,
-          sales,
-          movements,
-          suppliers,
-          purchases,
-          returns,
-          customers,
-          expenses,
-          shifts,
-          storeSettings,
-        })
-      );
+      localStorage.setItem(`${TENANT_STORE_PREFIX}${activeTenantId}`, serialized);
     } catch {
       // Ignore quota errors
     }
+
+    if (
+      !isCloudRef.current ||
+      cloudTenantHydratedRef.current !== activeTenantId ||
+      serialized === lastSyncedPayloadRef.current
+    ) {
+      return;
+    }
+
+    const targetTenantId = activeTenantId;
+    if (tenantSyncTimerRef.current) {
+      clearTimeout(tenantSyncTimerRef.current);
+    }
+
+    tenantSyncTimerRef.current = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `/api/cloud/tenant/${encodeURIComponent(targetTenantId)}`,
+          {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: serialized,
+          }
+        );
+        if (res.ok) {
+          lastSyncedPayloadRef.current = serialized;
+          setLastSyncTime(formatShortTime());
+        }
+      } catch {
+        // Offline — localStorage mirror stays intact
+      }
+    }, 650);
+
+    return () => {
+      if (tenantSyncTimerRef.current) {
+        clearTimeout(tenantSyncTimerRef.current);
+      }
+    };
   }, [
     isAuthChecking,
     activeTenantId,
@@ -518,11 +815,22 @@ export default function KelokraApp() {
       details,
     };
     setAuditLogs((prev) => [newEntry, ...prev]);
+    void postCloudPlatform({ action: "append_audit", entry: newEntry });
   };
 
   // Login Success Handler
-  const handleLoginSuccess = (session: AuthSession) => {
-    const tid = resolveTenantId(session, accounts);
+  const handleLoginSuccess = (
+    session: AuthSession,
+    meta?: { cloudMode?: boolean; tenantId?: string | null }
+  ) => {
+    const cloudActive = Boolean(meta?.cloudMode) || isCloudRef.current;
+    if (meta?.cloudMode !== undefined) {
+      isCloudRef.current = cloudActive;
+      setIsCloudConfigured(cloudActive);
+    }
+
+    const tid =
+      meta?.tenantId || resolveTenantId(session, accounts);
     loadAndApplyTenantStore(tid, session.storeName);
     setAuthSession(session);
     setLoginNotice(null);
@@ -532,6 +840,18 @@ export default function KelokraApp() {
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
     } catch {
       // Ignore storage error
+    }
+
+    if (cloudActive) {
+      void hydratePlatformFromCloud(session.role, {
+        accounts,
+        feedbacks,
+        auditLogs,
+        adminWhatsapp,
+      });
+      if (tid !== "SUPER_ADMIN_GLOBAL") {
+        void hydrateTenantFromCloud(tid, session.storeName);
+      }
     }
 
     if (session.accountId) {
@@ -549,23 +869,24 @@ export default function KelokraApp() {
       );
     }
 
-    setAuditLogs((prev) => [
-      {
-        id: generateId("aud"),
-        timestamp: `${new Date().toLocaleDateString("id-ID")} ${formatShortTime()}`,
-        actor: session.name,
-        role:
-          session.role === "OWNER"
-            ? "Owner"
-            : session.role === "CASHIER"
-            ? "Kasir"
-            : "Super Admin",
-        action: "USER_LOGIN",
-        module: "Auth",
-        details: `Login berhasil ke akun @${session.username} (${session.role}).`,
-      },
-      ...prev,
-    ]);
+    const loginAudit: AuditLogEntry = {
+      id: generateId("aud"),
+      timestamp: `${new Date().toLocaleDateString("id-ID")} ${formatShortTime()}`,
+      actor: session.name,
+      role:
+        session.role === "OWNER"
+          ? "Owner"
+          : session.role === "CASHIER"
+          ? "Kasir"
+          : "Super Admin",
+      action: "USER_LOGIN",
+      module: "Auth",
+      details: `Login berhasil ke akun @${session.username} (${session.role}).`,
+    };
+    setAuditLogs((prev) => [loginAudit, ...prev]);
+    if (cloudActive) {
+      void postCloudPlatform({ action: "append_audit", entry: loginAudit });
+    }
 
     if (session.role === "SUPER_ADMIN") {
       setActiveMenu("dashboard");
@@ -581,6 +902,13 @@ export default function KelokraApp() {
   // Logout Handler — Instant UI reset + non-blocking server cookie clear
   const handleLogout = () => {
     const logoutActor = authSession;
+
+    if (tenantSyncTimerRef.current) {
+      clearTimeout(tenantSyncTimerRef.current);
+      tenantSyncTimerRef.current = null;
+    }
+    cloudTenantHydratedRef.current = null;
+    lastSyncedPayloadRef.current = "";
 
     try {
       localStorage.removeItem(SESSION_STORAGE_KEY);
@@ -606,23 +934,24 @@ export default function KelokraApp() {
     setLoginNotice("Anda telah berhasil logout dari sistem.");
 
     if (logoutActor) {
-      setAuditLogs((prev) => [
-        {
-          id: generateId("aud"),
-          timestamp: `${new Date().toLocaleDateString("id-ID")} ${formatShortTime()}`,
-          actor: logoutActor.name,
-          role:
-            logoutActor.role === "OWNER"
-              ? "Owner"
-              : logoutActor.role === "CASHIER"
-              ? "Kasir"
-              : "Super Admin",
-          action: "USER_LOGOUT",
-          module: "Auth",
-          details: `Akun @${logoutActor.username} (${logoutActor.role}) keluar dari sistem.`,
-        },
-        ...prev,
-      ]);
+      const logoutAudit: AuditLogEntry = {
+        id: generateId("aud"),
+        timestamp: `${new Date().toLocaleDateString("id-ID")} ${formatShortTime()}`,
+        actor: logoutActor.name,
+        role:
+          logoutActor.role === "OWNER"
+            ? "Owner"
+            : logoutActor.role === "CASHIER"
+            ? "Kasir"
+            : "Super Admin",
+        action: "USER_LOGOUT",
+        module: "Auth",
+        details: `Akun @${logoutActor.username} (${logoutActor.role}) keluar dari sistem.`,
+      };
+      setAuditLogs((prev) => [logoutAudit, ...prev]);
+      if (isCloudRef.current) {
+        void postCloudPlatform({ action: "append_audit", entry: logoutAudit });
+      }
     }
 
     // Clear HttpOnly session cookie in background without freezing the button
@@ -703,42 +1032,55 @@ export default function KelokraApp() {
   const unsyncedSales = sales.filter((s) => !s.synced);
 
   const handleSyncOfflineTransactions = async () => {
-    if (unsyncedSales.length === 0) {
-      setIsOnline(true);
-      setLastSyncTime(formatShortTime());
-      showToast("Semua data transaksi sudah sinkron dengan server Cloud.");
-      return;
-    }
-
     setIsSyncing(true);
-    try {
-      await fetch("/api/sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          tenantId: activeTenantId || DEFAULT_TENANT_ID,
-          queuedTransactions: unsyncedSales.map((u) => ({
-            id: u.id,
-            idempotencyKey: u.idempotencyKey,
-          })),
-        }),
-      });
-    } catch {
-      // Continue local state update
+    if (unsyncedSales.length > 0) {
+      try {
+        await fetch("/api/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            tenantId: activeTenantId || DEFAULT_TENANT_ID,
+            queuedTransactions: unsyncedSales.map((u) => ({
+              id: u.id,
+              idempotencyKey: u.idempotencyKey,
+            })),
+          }),
+        });
+      } catch {
+        // Continue local state update
+      }
+
+      setSales((prev) => prev.map((s) => ({ ...s, synced: true })));
+      appendAudit(
+        "OFFLINE_SYNC",
+        "Offline Sync",
+        `Sinkronisasi berhasil untuk ${unsyncedSales.length} transaksi antrean lokal.`
+      );
+      showToast(
+        `Berhasil menyinkronkan ${unsyncedSales.length} transaksi offline ke Cloud!`
+      );
     }
 
-    setSales((prev) => prev.map((s) => ({ ...s, synced: true })));
+    if (isCloudRef.current && authSession) {
+      await hydratePlatformFromCloud(authSession.role, {
+        accounts,
+        feedbacks,
+        auditLogs,
+        adminWhatsapp,
+      });
+      if (activeTenantId && activeTenantId !== "SUPER_ADMIN_GLOBAL") {
+        await hydrateTenantFromCloud(activeTenantId, authSession.storeName);
+      }
+      if (unsyncedSales.length === 0) {
+        showToast("Data berhasil disinkronkan dengan Neon Cloud PostgreSQL.");
+      }
+    } else if (unsyncedSales.length === 0) {
+      showToast("Semua data transaksi sudah sinkron dengan penyimpanan lokal.");
+    }
+
     setIsOnline(true);
     setIsSyncing(false);
     setLastSyncTime(formatShortTime());
-    appendAudit(
-      "OFFLINE_SYNC",
-      "Offline Sync",
-      `Sinkronisasi berhasil untuk ${unsyncedSales.length} transaksi antrean lokal.`
-    );
-    showToast(
-      `Berhasil menyinkronkan ${unsyncedSales.length} transaksi offline ke Cloud!`
-    );
   };
 
   // Handler 3: Save / Delete Product
@@ -1176,6 +1518,10 @@ export default function KelokraApp() {
 
   const handleCreateAccountsBatch = (newAccounts: ManagedAccount[]) => {
     setAccounts((prev) => [...newAccounts, ...prev]);
+    void postCloudPlatform({
+      action: "create_accounts_batch",
+      accounts: newAccounts,
+    });
     const summaryNames = newAccounts
       .map((a) => `${a.role === "OWNER" ? "Owner" : "Kasir"} (${a.name})`)
       .join(" + ");
@@ -1203,6 +1549,11 @@ export default function KelokraApp() {
         };
       })
     );
+    void postCloudPlatform({
+      action: "extend_account",
+      accountId,
+      addMonths,
+    });
     appendAudit(
       "ACCOUNT_EXTENDED",
       "Super Admin",
@@ -1222,6 +1573,10 @@ export default function KelokraApp() {
           : a
       )
     );
+    void postCloudPlatform({
+      action: "toggle_status",
+      accountId,
+    });
     showToast("Status aktif akun diperbarui!");
   };
 
@@ -1270,6 +1625,13 @@ export default function KelokraApp() {
         };
       })
     );
+    void postCloudPlatform({
+      action: "reset_password",
+      accountId,
+      passwordHash,
+      passwordSalt,
+      ...(updatedEmail ? { updatedEmail } : {}),
+    });
     appendAudit(
       "ACCOUNT_PASSWORD_RESET",
       currentRole === "OWNER" ? "Daftar Akun" : "Super Admin",
@@ -1300,6 +1662,10 @@ export default function KelokraApp() {
       } catch {
         // Ignore storage error
       }
+      void postCloudPlatform({
+        action: "delete_account",
+        accountId,
+      });
       appendAudit(
         "OWNER_CASCADE_DELETED",
         "Super Admin",
@@ -1310,6 +1676,10 @@ export default function KelokraApp() {
       );
     } else {
       setAccounts((prev) => prev.filter((a) => a.id !== accountId));
+      void postCloudPlatform({
+        action: "delete_account",
+        accountId,
+      });
       appendAudit(
         "CASHIER_DELETED",
         "Super Admin",
@@ -1357,6 +1727,11 @@ export default function KelokraApp() {
         return a;
       })
     );
+    void postCloudPlatform({
+      action: "edit_account",
+      accountId,
+      updates,
+    });
 
     appendAudit(
       "ACCOUNT_UPDATED",
@@ -1368,6 +1743,10 @@ export default function KelokraApp() {
 
   const handleAddFeedback = (fb: DeveloperFeedback) => {
     setFeedbacks((prev) => [fb, ...prev]);
+    void postCloudPlatform({
+      action: "add_feedback",
+      feedback: fb,
+    });
     appendAudit(
       "FEEDBACK_SUBMITTED",
       "Saran Pengembang",
@@ -1380,11 +1759,19 @@ export default function KelokraApp() {
     setFeedbacks((prev) =>
       prev.map((f) => (f.id === feedbackId ? { ...f, isRead: true } : f))
     );
+    void postCloudPlatform({
+      action: "mark_feedback_read",
+      feedbackId,
+    });
     showToast("Saran ditandai sudah dibaca.");
   };
 
   const handleDeleteFeedback = (feedbackId: string) => {
     setFeedbacks((prev) => prev.filter((f) => f.id !== feedbackId));
+    void postCloudPlatform({
+      action: "delete_feedback",
+      feedbackId,
+    });
     showToast("Saran pengembang dihapus.");
   };
 
@@ -1394,6 +1781,10 @@ export default function KelokraApp() {
       digits = `62${digits.slice(1)}`;
     }
     setAdminWhatsapp(digits);
+    void postCloudPlatform({
+      action: "update_admin_whatsapp",
+      digits,
+    });
     showToast(
       digits
         ? `Nomor WhatsApp Admin disimpan: +${digits}`
@@ -1586,7 +1977,11 @@ export default function KelokraApp() {
                   }`}
                 />
                 <span className="text-xs font-extrabold">
-                  {isOnline ? "Online" : "Mode Offline"}
+                  {isOnline
+                    ? isCloudConfigured
+                      ? "Cloud Neon"
+                      : "Online (Lokal)"
+                    : "Mode Offline"}
                 </span>
               </div>
               <button
