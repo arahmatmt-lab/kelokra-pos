@@ -240,3 +240,15 @@ export interface StoreSettings {
   qrisImageDataUrl: string;
   transferChannels: TransferPaymentChannel[];
 }
+
+export interface DeveloperFeedback {
+  id: string;
+  ownerId: string;
+  ownerName: string;
+  storeName: string;
+  category: "Fitur Baru" | "Perbaikan Bug" | "Tampilan / UI" | "Lainnya";
+  title: string;
+  message: string;
+  createdAt: string; // ISO string
+  isRead: boolean;
+}

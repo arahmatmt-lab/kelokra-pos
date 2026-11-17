@@ -13,13 +13,14 @@ import {
   Sparkles,
   PackagePlus,
 } from "lucide-react";
-import { Product, SaleTransaction } from "@/types/nextpos";
+import { Product, SaleTransaction, UserRole } from "@/types/nextpos";
 import { HOURLY_SALES_CHART } from "@/lib/initial-data";
 import { formatIDR } from "@/lib/format";
 import { ProductVisual } from "@/components/ProductVisual";
 
 interface DashboardViewProps {
   userName: string;
+  userRole?: UserRole;
   products: Product[];
   sales: SaleTransaction[];
   canUsePos?: boolean;
@@ -28,6 +29,7 @@ interface DashboardViewProps {
 
 export function DashboardView({
   userName,
+  userRole = "OWNER",
   products,
   sales,
   canUsePos = true,
@@ -162,8 +164,14 @@ export function DashboardView({
         </div>
       </div>
 
-      {/* 4 KPI Cards Row */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+      {/* KPI Cards Row (Laba Bersih disembunyikan untuk role Kasir) */}
+      <div
+        className={`grid grid-cols-1 gap-4 ${
+          userRole === "CASHIER"
+            ? "sm:grid-cols-3"
+            : "sm:grid-cols-2 xl:grid-cols-4"
+        }`}
+      >
         {/* Card 1: Total Penjualan */}
         <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-card relative overflow-hidden">
           <div className="flex items-center justify-between mb-3">
@@ -212,21 +220,23 @@ export function DashboardView({
           </p>
         </div>
 
-        {/* Card 4: Laba Bersih */}
-        <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-card relative overflow-hidden">
-          <div className="flex items-center justify-between mb-3">
-            <div className="w-10 h-10 rounded-xl bg-emerald-500/15 flex items-center justify-center text-emerald-600">
-              <TrendingUp className="w-5 h-5" />
+        {/* Card 4: Laba Bersih (Khusus Owner) */}
+        {userRole !== "CASHIER" && (
+          <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-card relative overflow-hidden">
+            <div className="flex items-center justify-between mb-3">
+              <div className="w-10 h-10 rounded-xl bg-emerald-500/15 flex items-center justify-center text-emerald-600">
+                <TrendingUp className="w-5 h-5" />
+              </div>
+              <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full">
+                Profit
+              </span>
             </div>
-            <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full">
-              Profit
-            </span>
+            <p className="text-xs font-medium text-slate-500">Laba Bersih</p>
+            <p className="text-xl sm:text-2xl font-extrabold text-navy-800 mt-0.5">
+              {formatIDR(netProfitToday)}
+            </p>
           </div>
-          <p className="text-xs font-medium text-slate-500">Laba Bersih</p>
-          <p className="text-xl sm:text-2xl font-extrabold text-navy-800 mt-0.5">
-            {formatIDR(netProfitToday)}
-          </p>
-        </div>
+        )}
       </div>
 
       {/* Main Chart + Best-Selling Products Row */}

@@ -30,10 +30,13 @@ import {
   AlertTriangle,
   Copy,
   Check,
+  MessageSquarePlus,
+  Send,
   X,
 } from "lucide-react";
 import {
   AuditLogEntry,
+  DeveloperFeedback,
   ManagedAccount,
   OwnerAccountMode,
   StoreSettings,
@@ -61,11 +64,17 @@ interface SaasSettingsAdminViewProps {
     | "payment-methods"
     | "settings"
     | "help"
-    | "super-admin";
+    | "super-admin"
+    | "feedback"
+    | "feedback-admin";
   userRole?: UserRole;
+  activeOwnerAccount?: ManagedAccount | null;
   accounts: ManagedAccount[];
   storeSettings: StoreSettings;
   auditLogs: AuditLogEntry[];
+  feedbacks?: DeveloperFeedback[];
+  adminWhatsapp?: string;
+  onUpdateAdminWhatsapp?: (wa: string) => void;
   onCreateAccountsBatch: (newAccounts: ManagedAccount[]) => void;
   onExtendAccount: (accountId: string, addMonths: number) => void;
   onToggleAccountStatus: (accountId: string) => void;
@@ -76,6 +85,18 @@ interface SaasSettingsAdminViewProps {
     passwordSalt: string,
     updatedEmail?: string
   ) => void;
+  onEditAccount?: (
+    accountId: string,
+    updates: {
+      name: string;
+      username: string;
+      storeName: string;
+      email: string;
+    }
+  ) => void;
+  onAddFeedback?: (fb: DeveloperFeedback) => void;
+  onMarkFeedbackRead?: (feedbackId: string) => void;
+  onDeleteFeedback?: (feedbackId: string) => void;
   onUpdateSettings: (next: StoreSettings) => void;
   onExportBackup: () => void;
   onImportBackup?: (jsonText: string) => { ok: boolean; message: string };
@@ -118,20 +139,35 @@ function GmailLogo({ className = "w-5 h-5" }: { className?: string }) {
 export function SaasSettingsAdminView({
   mode,
   userRole = "OWNER",
+  activeOwnerAccount = null,
   accounts,
   storeSettings,
   auditLogs,
+  feedbacks = [],
+  adminWhatsapp = "",
+  onUpdateAdminWhatsapp,
   onCreateAccountsBatch,
   onExtendAccount,
   onToggleAccountStatus,
   onDeleteAccount,
   onResetAccountPassword,
+  onEditAccount,
+  onAddFeedback,
+  onMarkFeedbackRead,
+  onDeleteFeedback,
   onUpdateSettings,
   onExportBackup,
   onImportBackup,
   onResetAllData,
   onNavigate,
 }: SaasSettingsAdminViewProps) {
+  // Developer Feedback (Saran Pengembang) form state for Owner
+  const [fbCategory, setFbCategory] =
+    useState<DeveloperFeedback["category"]>("Fitur Baru");
+  const [fbTitle, setFbTitle] = useState("");
+  const [fbMessage, setFbMessage] = useState("");
+  const [waAdminDraft, setWaAdminDraft] = useState(adminWhatsapp);
+
   // Settings sub-tab
   const [settingsTab, setSettingsTab] = useState<
     "Umum" | "Pembayaran" | "Notifikasi" | "Keamanan" | "Integrasi" | "Backup"
@@ -1746,6 +1782,35 @@ export function SaasSettingsAdminView({
                   Informasi Toko
                 </h2>
 
+                {userRole === "SUPER_ADMIN" && onUpdateAdminWhatsapp && (
+                  <div className="p-5 rounded-2xl border border-emerald-200 bg-emerald-50/60 space-y-3">
+                    <div>
+                      <h3 className="text-sm font-extrabold text-navy-800">
+                        Nomor WhatsApp Super Admin (Untuk Perpanjangan Owner)
+                      </h3>
+                      <p className="text-xs text-slate-600 mt-0.5">
+                        Digunakan untuk tombol <b>Perpanjang via WhatsApp</b> saat masa aktif akun Owner tinggal 7 hari. Gunakan format angka seperti <code>6281234567890</code>.
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <input
+                        type="text"
+                        value={waAdminDraft}
+                        onChange={(e) => setWaAdminDraft(e.target.value)}
+                        placeholder="6281234567890"
+                        className="flex-1 min-w-[200px] px-3.5 py-2 rounded-xl border border-slate-200 bg-white text-xs sm:text-sm font-mono"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => onUpdateAdminWhatsapp(waAdminDraft)}
+                        className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold"
+                      >
+                        Simpan Nomor WA
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 <div className="p-5 rounded-2xl border border-slate-200/80 flex flex-wrap items-center justify-between gap-4">
                   {!editingStoreInfo ? (
                     <>
@@ -2146,6 +2211,316 @@ export function SaasSettingsAdminView({
   }
 
   // ============================================================================
+  // MODE: SARAN PENGEMBANG (OWNER)
+  // ============================================================================
+  if (mode === "feedback") {
+    const ownerId = activeOwnerAccount?.id || "";
+    const myFeedbacks = ownerId
+      ? feedbacks.filter((f) => f.ownerId === ownerId)
+      : feedbacks;
+
+    const handleSubmitFeedback = (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!fbTitle.trim() || !fbMessage.trim() || !onAddFeedback) return;
+      onAddFeedback({
+        id: generateId("fb"),
+        ownerId: activeOwnerAccount?.id || "owner-local",
+        ownerName: activeOwnerAccount?.name || "Owner",
+        storeName: activeOwnerAccount?.storeName || storeSettings.storeName,
+        category: fbCategory,
+        title: fbTitle.trim(),
+        message: fbMessage.trim(),
+        createdAt: new Date().toISOString(),
+        isRead: false,
+      });
+      setFbTitle("");
+      setFbMessage("");
+      setFbCategory("Fitur Baru");
+    };
+
+    return (
+      <div className="space-y-6">
+        <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-card space-y-5">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-2xl bg-emerald-500/10 text-emerald-600 flex items-center justify-center shrink-0">
+              <MessageSquarePlus className="w-6 h-6" />
+            </div>
+            <div>
+              <h1 className="text-xl sm:text-2xl font-extrabold text-navy-800">
+                Saran Pengembang
+              </h1>
+              <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
+                Kirim ide fitur, masukan tampilan, atau laporan kendala langsung ke Super Admin / Pengembang KELOKRA.
+              </p>
+            </div>
+          </div>
+
+          <form onSubmit={handleSubmitFeedback} className="space-y-4 text-sm">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Kategori Saran
+                </label>
+                <select
+                  value={fbCategory}
+                  onChange={(e) =>
+                    setFbCategory(
+                      e.target.value as DeveloperFeedback["category"]
+                    )
+                  }
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white"
+                >
+                  <option value="Fitur Baru">Fitur Baru</option>
+                  <option value="Perbaikan Bug">Perbaikan Bug</option>
+                  <option value="Tampilan / UI">Tampilan / UI</option>
+                  <option value="Lainnya">Lainnya</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Judul Singkat
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={fbTitle}
+                  onChange={(e) => setFbTitle(e.target.value)}
+                  placeholder="Contoh: Tambah cetak struk logo toko"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                Detail Saran / Masukan
+              </label>
+              <textarea
+                rows={4}
+                required
+                value={fbMessage}
+                onChange={(e) => setFbMessage(e.target.value)}
+                placeholder="Jelaskan kebutuhan atau kendala yang Anda alami secara detail..."
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 resize-none"
+              />
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                type="submit"
+                className="px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs sm:text-sm font-extrabold shadow-xs inline-flex items-center gap-2 transition"
+              >
+                <Send className="w-4 h-4" />
+                <span>Kirim Saran ke Pengembang</span>
+              </button>
+            </div>
+          </form>
+        </div>
+
+        <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-card space-y-4">
+          <h2 className="text-base sm:text-lg font-extrabold text-navy-800">
+            Riwayat Saran Toko Anda ({myFeedbacks.length})
+          </h2>
+
+          {myFeedbacks.length === 0 ? (
+            <div className="py-10 text-center text-xs text-slate-400 border border-dashed border-slate-200 rounded-2xl">
+              Belum ada saran pengembang yang Anda kirimkan.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase">
+                    <th className="py-3 px-3">Kategori</th>
+                    <th className="py-3 px-3">Judul &amp; Isi Saran</th>
+                    <th className="py-3 px-3">Tanggal</th>
+                    <th className="py-3 px-3">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {myFeedbacks.map((fb) => (
+                    <tr key={fb.id} className="hover:bg-slate-50/80">
+                      <td className="py-3 px-3">
+                        <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 text-xs font-bold">
+                          {fb.category}
+                        </span>
+                      </td>
+                      <td className="py-3 px-3">
+                        <p className="font-bold text-navy-800 text-xs sm:text-sm">
+                          {fb.title}
+                        </p>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          {fb.message}
+                        </p>
+                      </td>
+                      <td className="py-3 px-3 text-xs text-slate-500 whitespace-nowrap">
+                        {formatDateOnly(fb.createdAt)}
+                      </td>
+                      <td className="py-3 px-3">
+                        <span
+                          className={`px-2.5 py-1 rounded-full text-xs font-bold ${
+                            fb.isRead
+                              ? "bg-emerald-50 text-emerald-700"
+                              : "bg-amber-50 text-amber-800"
+                          }`}
+                        >
+                          {fb.isRead ? "Sudah Dibaca" : "Menunggu Dibaca"}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ============================================================================
+  // MODE: SEMUA SARAN PENGEMBANG DARI CLIENT (SUPER ADMIN)
+  // ============================================================================
+  if (mode === "feedback-admin") {
+    const unreadCount = feedbacks.filter((f) => !f.isRead).length;
+    const readCount = feedbacks.filter((f) => f.isRead).length;
+
+    return (
+      <div className="space-y-6">
+        <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-card space-y-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="w-11 h-11 rounded-2xl bg-sky-50 text-sky-600 flex items-center justify-center shrink-0">
+                <MessageSquarePlus className="w-6 h-6" />
+              </div>
+              <div>
+                <h1 className="text-xl sm:text-2xl font-extrabold text-navy-800">
+                  Semua Saran Pengembang dari Client
+                </h1>
+                <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
+                  Tinjau seluruh masukan dari Owner toko, tandai sudah dibaca, atau hapus saran.
+                </p>
+              </div>
+            </div>
+
+            {onNavigate && (
+              <button
+                type="button"
+                onClick={() => onNavigate("dashboard")}
+                className="px-4 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-xs font-bold text-navy-800"
+              >
+                Kembali ke Dashboard
+              </button>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/70">
+              <p className="text-xs font-bold text-slate-500">Total Saran</p>
+              <p className="text-xl font-extrabold text-navy-800 mt-0.5">
+                {feedbacks.length} Saran
+              </p>
+            </div>
+            <div className="p-4 rounded-xl bg-amber-50/70 border border-amber-200/70">
+              <p className="text-xs font-bold text-amber-800">Belum Dibaca</p>
+              <p className="text-xl font-extrabold text-amber-700 mt-0.5">
+                {unreadCount} Saran
+              </p>
+            </div>
+            <div className="p-4 rounded-xl bg-emerald-50/70 border border-emerald-200/70">
+              <p className="text-xs font-bold text-emerald-800">Sudah Dibaca</p>
+              <p className="text-xl font-extrabold text-emerald-700 mt-0.5">
+                {readCount} Saran
+              </p>
+            </div>
+          </div>
+
+          {feedbacks.length === 0 ? (
+            <div className="py-12 text-center text-xs text-slate-400 border border-dashed border-slate-200 rounded-2xl">
+              Belum ada saran pengembang yang masuk dari client.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase">
+                    <th className="py-3 px-3">Toko &amp; Owner</th>
+                    <th className="py-3 px-3">Kategori &amp; Isi Saran</th>
+                    <th className="py-3 px-3">Tanggal</th>
+                    <th className="py-3 px-3">Status</th>
+                    <th className="py-3 px-3 text-right">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {feedbacks.map((fb) => (
+                    <tr key={fb.id} className="hover:bg-slate-50/80">
+                      <td className="py-3.5 px-3">
+                        <p className="font-extrabold text-navy-800">
+                          {fb.storeName}
+                        </p>
+                        <p className="text-xs text-slate-500">{fb.ownerName}</p>
+                      </td>
+                      <td className="py-3.5 px-3 max-w-lg">
+                        <span className="inline-block px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[10px] font-bold mb-1">
+                          {fb.category}
+                        </span>
+                        <p className="font-bold text-navy-800 text-xs sm:text-sm">
+                          {fb.title}
+                        </p>
+                        <p className="text-xs text-slate-600 mt-0.5">
+                          {fb.message}
+                        </p>
+                      </td>
+                      <td className="py-3.5 px-3 text-xs text-slate-500 whitespace-nowrap">
+                        {formatDateOnly(fb.createdAt)}
+                      </td>
+                      <td className="py-3.5 px-3 text-xs">
+                        <span
+                          className={`px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap ${
+                            fb.isRead
+                              ? "bg-emerald-50 text-emerald-700"
+                              : "bg-amber-50 text-amber-800"
+                          }`}
+                        >
+                          {fb.isRead ? "Sudah Dibaca" : "Belum Dibaca"}
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-3 text-right">
+                        <div className="inline-flex items-center gap-1.5">
+                          {!fb.isRead && onMarkFeedbackRead && (
+                            <button
+                              type="button"
+                              onClick={() => onMarkFeedbackRead(fb.id)}
+                              className="px-2.5 py-1.5 rounded-lg border border-emerald-500 text-emerald-700 hover:bg-emerald-50 text-[11px] font-bold inline-flex items-center gap-1 whitespace-nowrap"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              <span>Saran Sudah Dibaca</span>
+                            </button>
+                          )}
+                          {onDeleteFeedback && (
+                            <button
+                              type="button"
+                              onClick={() => onDeleteFeedback(fb.id)}
+                              className="px-2.5 py-1.5 rounded-lg border border-rose-200 text-rose-600 hover:bg-rose-50 text-[11px] font-bold inline-flex items-center gap-1 whitespace-nowrap"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>Hapus Saran</span>
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ============================================================================
   // MODE: BANTUAN
   // ============================================================================
   if (mode === "help") {
@@ -2419,14 +2794,6 @@ export function SaasSettingsAdminView({
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
-          {onNavigate && (
-            <button
-              onClick={() => onNavigate("dashboard")}
-              className="px-4 py-3 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs sm:text-sm font-bold border border-white/20 transition"
-            >
-              Lihat Grafik Langganan
-            </button>
-          )}
           <button
             onClick={openCreateModal}
             className="px-5 py-3 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs sm:text-sm font-extrabold shadow-md flex items-center gap-2 transition"
@@ -2437,8 +2804,8 @@ export function SaasSettingsAdminView({
         </div>
       </div>
 
-      {/* 4 Summary Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+      {/* 5 Summary Cards (termasuk Total Saran di sebelah Isolasi & Keamanan) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
         <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-card">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-bold text-slate-500">
@@ -2496,6 +2863,25 @@ export function SaasSettingsAdminView({
             Kontrol penuh oleh Super Admin
           </p>
         </div>
+
+        <button
+          type="button"
+          onClick={() => onNavigate?.("feedback-admin")}
+          className="text-left bg-white rounded-2xl border border-slate-200/80 hover:border-sky-300 p-5 shadow-card transition"
+        >
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-bold text-slate-500">
+              Total Saran
+            </span>
+            <MessageSquarePlus className="w-4 h-4 text-sky-600" />
+          </div>
+          <p className="text-2xl font-extrabold text-navy-800">
+            {feedbacks.length} Saran
+          </p>
+          <p className="text-[11px] text-sky-600 font-semibold mt-1">
+            {feedbacks.filter((f) => !f.isRead).length} belum dibaca →
+          </p>
+        </button>
       </div>
 
       {/* One-time Credential Display Card */}
@@ -3111,6 +3497,7 @@ export function SaasSettingsAdminView({
         onToggleAccountStatus={onToggleAccountStatus}
         onDeleteAccount={onDeleteAccount}
         onResetAccountPassword={onResetAccountPassword}
+        onEditAccount={onEditAccount}
       />
     </div>
   );

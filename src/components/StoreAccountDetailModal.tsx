@@ -7,6 +7,7 @@ import {
   Check,
   Clock,
   Copy,
+  Edit3,
   KeyRound,
   Plus,
   ShieldCheck,
@@ -39,6 +40,15 @@ interface StoreAccountDetailModalProps {
     passwordHash: string,
     passwordSalt: string
   ) => void;
+  onEditAccount?: (
+    accountId: string,
+    updates: {
+      name: string;
+      username: string;
+      storeName: string;
+      email: string;
+    }
+  ) => void;
 }
 
 export function StoreAccountDetailModal({
@@ -50,6 +60,7 @@ export function StoreAccountDetailModal({
   onToggleAccountStatus,
   onDeleteAccount,
   onResetAccountPassword,
+  onEditAccount,
 }: StoreAccountDetailModalProps) {
   // Add Kasir form inside detail modal
   const [showAddCashierForm, setShowAddCashierForm] = useState(false);
@@ -80,6 +91,63 @@ export function StoreAccountDetailModal({
   // Inline Extend Modal state
   const [extendTarget, setExtendTarget] = useState<ManagedAccount | null>(null);
   const [extendMonths, setExtendMonths] = useState<number>(1);
+
+  // Inline Edit Account state
+  const [editTarget, setEditTarget] = useState<ManagedAccount | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editStoreName, setEditStoreName] = useState("");
+  const [editUsername, setEditUsername] = useState("");
+  const [editEmail, setEditEmail] = useState("");
+  const [editError, setEditError] = useState<string | null>(null);
+
+  const openEditAccount = (acc: ManagedAccount) => {
+    setEditTarget(acc);
+    setEditName(acc.name);
+    setEditStoreName(acc.storeName);
+    setEditUsername(acc.username);
+    setEditEmail(acc.email === "-" ? "" : acc.email || "");
+    setEditError(null);
+  };
+
+  const handleEditAccountSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editTarget || !onEditAccount) return;
+    setEditError(null);
+
+    const cleanName = editName.trim();
+    const cleanStore = editStoreName.trim();
+    const cleanUname = editUsername.trim().toLowerCase();
+    const cleanEmail = editEmail.trim().toLowerCase();
+
+    if (!cleanName || !cleanUname || (editTarget.role === "OWNER" && !cleanStore)) {
+      setEditError("Nama, Username, dan Nama Toko wajib diisi.");
+      return;
+    }
+    if (
+      allAccounts.some(
+        (a) => a.id !== editTarget.id && a.username.toLowerCase() === cleanUname
+      )
+    ) {
+      setEditError(`Username "@${cleanUname}" sudah digunakan akun lain.`);
+      return;
+    }
+    if (
+      cleanEmail &&
+      cleanEmail !== "-" &&
+      !/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(cleanEmail)
+    ) {
+      setEditError("Format Email Gmail tidak valid.");
+      return;
+    }
+
+    onEditAccount(editTarget.id, {
+      name: cleanName,
+      username: cleanUname,
+      storeName: editTarget.role === "OWNER" ? cleanStore : editTarget.storeName,
+      email: cleanEmail || "-",
+    });
+    setEditTarget(null);
+  };
 
   if (!ownerAccount) return null;
 
@@ -458,6 +526,17 @@ export function StoreAccountDetailModal({
                     </td>
                     <td className="py-3.5 px-3 text-right">
                       <div className="inline-flex items-center gap-1.5">
+                        {onEditAccount && (
+                          <button
+                            type="button"
+                            onClick={() => openEditAccount(acc)}
+                            title="Edit Data Akun"
+                            className="px-2.5 py-1.5 rounded-lg border border-sky-200 text-sky-700 hover:bg-sky-50 text-[11px] font-bold inline-flex items-center gap-1"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                            <span>Edit</span>
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => {
@@ -485,6 +564,94 @@ export function StoreAccountDetailModal({
             </tbody>
           </table>
         </div>
+
+        {/* Inline Edit Account Panel */}
+        {editTarget && onEditAccount && (
+          <form
+            onSubmit={handleEditAccountSubmit}
+            className="p-4 rounded-2xl bg-sky-50/80 border border-sky-200 space-y-3"
+          >
+            <div className="flex items-center justify-between">
+              <p className="text-xs sm:text-sm font-extrabold text-navy-800 flex items-center gap-1.5">
+                <Edit3 className="w-4 h-4 text-sky-600" />
+                <span>
+                  Edit Profil Akun ({editTarget.role === "OWNER" ? "Owner" : "Kasir"}): @
+                  {editTarget.username}
+                </span>
+              </p>
+              <button
+                type="button"
+                onClick={() => setEditTarget(null)}
+                className="text-xs font-bold text-slate-500"
+              >
+                Batal
+              </button>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs">
+              <div>
+                <label className="block font-bold text-slate-600 mb-1">
+                  Nama Lengkap
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white"
+                />
+              </div>
+              {editTarget.role === "OWNER" && (
+                <div>
+                  <label className="block font-bold text-slate-600 mb-1">
+                    Nama Toko
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={editStoreName}
+                    onChange={(e) => setEditStoreName(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white"
+                  />
+                </div>
+              )}
+              <div>
+                <label className="block font-bold text-slate-600 mb-1">
+                  Username Login
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editUsername}
+                  onChange={(e) => setEditUsername(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-600 mb-1">
+                  Email Gmail
+                </label>
+                <input
+                  type="email"
+                  value={editEmail}
+                  onChange={(e) => setEditEmail(e.target.value)}
+                  placeholder="contoh@gmail.com"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white"
+                />
+              </div>
+            </div>
+            {editError && (
+              <p className="text-xs font-bold text-rose-600">{editError}</p>
+            )}
+            <div className="flex justify-end">
+              <button
+                type="submit"
+                className="px-4 py-2 rounded-xl bg-navy-800 hover:bg-emerald-600 text-white text-xs font-bold transition"
+              >
+                Simpan Perubahan Data
+              </button>
+            </div>
+          </form>
+        )}
 
         {/* Inline Reset Password Panel */}
         {resetTarget && (

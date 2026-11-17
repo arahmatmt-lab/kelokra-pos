@@ -12,14 +12,18 @@ import {
   BarChart3,
   TrendingUp,
   Eye,
+  MessageSquarePlus,
+  CheckCircle2,
+  Trash2,
 } from "lucide-react";
-import { ManagedAccount } from "@/types/nextpos";
+import { DeveloperFeedback, ManagedAccount } from "@/types/nextpos";
 import { formatDateOnly, getRemainingTimeInfo } from "@/lib/format";
 import { StoreAccountDetailModal } from "@/components/StoreAccountDetailModal";
 
 interface SuperAdminDashboardViewProps {
   userName: string;
   accounts: ManagedAccount[];
+  feedbacks?: DeveloperFeedback[];
   onNavigate: (menu: string) => void;
   onCreateAccountsBatch: (newAccounts: ManagedAccount[]) => void;
   onExtendAccount: (accountId: string, addMonths: number) => void;
@@ -30,6 +34,17 @@ interface SuperAdminDashboardViewProps {
     passwordHash: string,
     passwordSalt: string
   ) => void;
+  onEditAccount?: (
+    accountId: string,
+    updates: {
+      name: string;
+      username: string;
+      storeName: string;
+      email: string;
+    }
+  ) => void;
+  onMarkFeedbackRead?: (feedbackId: string) => void;
+  onDeleteFeedback?: (feedbackId: string) => void;
 }
 
 const MONTH_LABELS = [
@@ -50,12 +65,16 @@ const MONTH_LABELS = [
 export function SuperAdminDashboardView({
   userName,
   accounts,
+  feedbacks = [],
   onNavigate,
   onCreateAccountsBatch,
   onExtendAccount,
   onToggleAccountStatus,
   onDeleteAccount,
   onResetAccountPassword,
+  onEditAccount,
+  onMarkFeedbackRead,
+  onDeleteFeedback,
 }: SuperAdminDashboardViewProps) {
   const [selectedYear, setSelectedYear] = useState<number>(
     new Date().getFullYear()
@@ -512,6 +531,115 @@ export function SuperAdminDashboardView({
         )}
       </div>
 
+      {/* Catatan Saran Pengembang dari Client */}
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-card space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-xl bg-sky-50 text-sky-600 flex items-center justify-center shrink-0">
+              <MessageSquarePlus className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-base sm:text-lg font-extrabold text-navy-800">
+                Catatan Saran Pengembang dari Client
+              </h2>
+              <p className="text-xs text-slate-500">
+                Masukan, ide fitur, dan kendala yang dikirim langsung oleh Owner toko.
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => onNavigate("feedback-admin")}
+            className="text-xs font-bold text-emerald-600 hover:underline flex items-center gap-1"
+          >
+            <span>Lihat Semua Saran</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+        {feedbacks.length === 0 ? (
+          <div className="py-10 text-center text-xs text-slate-400 border border-dashed border-slate-200 rounded-2xl">
+            Belum ada saran pengembang yang dikirim oleh Owner toko.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase">
+                  <th className="py-3 px-3">Toko &amp; Pengirim</th>
+                  <th className="py-3 px-3">Kategori &amp; Isi Saran</th>
+                  <th className="py-3 px-3">Tanggal</th>
+                  <th className="py-3 px-3">Status</th>
+                  <th className="py-3 px-3 text-right">Aksi</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {feedbacks.slice(0, 5).map((fb) => (
+                  <tr key={fb.id} className="hover:bg-slate-50/80">
+                    <td className="py-3 px-3">
+                      <p className="font-extrabold text-navy-800">
+                        {fb.storeName}
+                      </p>
+                      <p className="text-xs text-slate-500">{fb.ownerName}</p>
+                    </td>
+                    <td className="py-3 px-3 max-w-md">
+                      <span className="inline-block px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[10px] font-bold mb-1">
+                        {fb.category}
+                      </span>
+                      <p className="font-bold text-navy-800 text-xs">
+                        {fb.title}
+                      </p>
+                      <p className="text-xs text-slate-600 line-clamp-2">
+                        {fb.message}
+                      </p>
+                    </td>
+                    <td className="py-3 px-3 text-xs text-slate-500 whitespace-nowrap">
+                      {formatDateOnly(fb.createdAt)}
+                    </td>
+                    <td className="py-3 px-3 text-xs">
+                      <span
+                        className={`px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap ${
+                          fb.isRead
+                            ? "bg-emerald-50 text-emerald-700"
+                            : "bg-amber-50 text-amber-800"
+                        }`}
+                      >
+                        {fb.isRead ? "Sudah Dibaca" : "Belum Dibaca"}
+                      </span>
+                    </td>
+                    <td className="py-3 px-3 text-right">
+                      <div className="inline-flex items-center gap-1.5">
+                        {!fb.isRead && onMarkFeedbackRead && (
+                          <button
+                            type="button"
+                            onClick={() => onMarkFeedbackRead(fb.id)}
+                            className="px-2.5 py-1.5 rounded-lg border border-emerald-500 text-emerald-700 hover:bg-emerald-50 text-[11px] font-bold inline-flex items-center gap-1 whitespace-nowrap"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span>Saran Sudah Dibaca</span>
+                          </button>
+                        )}
+                        {onDeleteFeedback && (
+                          <button
+                            type="button"
+                            onClick={() => onDeleteFeedback(fb.id)}
+                            className="px-2.5 py-1.5 rounded-lg border border-rose-200 text-rose-600 hover:bg-rose-50 text-[11px] font-bold inline-flex items-center gap-1 whitespace-nowrap"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Hapus Saran</span>
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
       {/* Modal Detail Akun Owner & Kasir (Icon Mata) */}
       <StoreAccountDetailModal
         ownerAccount={detailOwner}
@@ -522,6 +650,7 @@ export function SuperAdminDashboardView({
         onToggleAccountStatus={onToggleAccountStatus}
         onDeleteAccount={onDeleteAccount}
         onResetAccountPassword={onResetAccountPassword}
+        onEditAccount={onEditAccount}
       />
     </div>
   );

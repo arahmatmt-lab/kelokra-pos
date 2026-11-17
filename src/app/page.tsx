@@ -28,12 +28,15 @@ import {
   CheckCircle2,
   AlertTriangle,
   Download,
+  MessageSquarePlus,
+  MessageCircle,
 } from "lucide-react";
 import {
   AuditLogEntry,
   AuthSession,
   CashShiftRecord,
   Customer,
+  DeveloperFeedback,
   ExpenseRecord,
   ManagedAccount,
   Product,
@@ -150,6 +153,8 @@ export default function KelokraApp() {
   );
   const [auditLogs, setAuditLogs] =
     useState<AuditLogEntry[]>(INITIAL_AUDIT_LOGS);
+  const [feedbacks, setFeedbacks] = useState<DeveloperFeedback[]>([]);
+  const [adminWhatsapp, setAdminWhatsapp] = useState<string>("");
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -266,6 +271,8 @@ export default function KelokraApp() {
     const initApp = async () => {
       let loadedAccounts: ManagedAccount[] = INITIAL_MANAGED_ACCOUNTS;
       let loadedAuditLogs: AuditLogEntry[] = INITIAL_AUDIT_LOGS;
+      let loadedFeedbacks: DeveloperFeedback[] = [];
+      let loadedAdminWa = "";
       let legacyOperational: Record<string, unknown> | null = null;
 
       try {
@@ -316,6 +323,12 @@ export default function KelokraApp() {
           if (Array.isArray(parsed.auditLogs)) {
             loadedAuditLogs = parsed.auditLogs;
           }
+          if (Array.isArray(parsed.feedbacks)) {
+            loadedFeedbacks = parsed.feedbacks;
+          }
+          if (typeof parsed.adminWhatsapp === "string") {
+            loadedAdminWa = parsed.adminWhatsapp;
+          }
           if (
             (Array.isArray(parsed.products) && parsed.products.length > 0) ||
             (Array.isArray(parsed.sales) && parsed.sales.length > 0) ||
@@ -349,6 +362,8 @@ export default function KelokraApp() {
               JSON.stringify({
                 accounts: loadedAccounts,
                 auditLogs: loadedAuditLogs,
+                feedbacks: loadedFeedbacks,
+                adminWhatsapp: loadedAdminWa,
               })
             );
           }
@@ -357,6 +372,8 @@ export default function KelokraApp() {
         if (isCancelled) return;
         setAccounts(loadedAccounts);
         setAuditLogs(loadedAuditLogs);
+        setFeedbacks(loadedFeedbacks);
+        setAdminWhatsapp(loadedAdminWa);
 
         const savedSession = localStorage.getItem(SESSION_STORAGE_KEY);
         if (savedSession) {
@@ -420,7 +437,7 @@ export default function KelokraApp() {
     };
   }, []);
 
-  // Save global accounts & audit logs
+  // Save global accounts, audit logs, feedbacks, and admin WA number
   useEffect(() => {
     if (isAuthChecking) return;
     try {
@@ -429,12 +446,14 @@ export default function KelokraApp() {
         JSON.stringify({
           accounts,
           auditLogs,
+          feedbacks,
+          adminWhatsapp,
         })
       );
     } catch {
       // Ignore quota errors
     }
-  }, [isAuthChecking, accounts, auditLogs]);
+  }, [isAuthChecking, accounts, auditLogs, feedbacks, adminWhatsapp]);
 
   // Save isolated operational data per Owner store
   useEffect(() => {
@@ -1300,6 +1319,104 @@ export default function KelokraApp() {
     }
   };
 
+  const handleEditAccount = (
+    accountId: string,
+    updates: {
+      name: string;
+      username: string;
+      storeName: string;
+      email: string;
+    }
+  ) => {
+    if (currentRole !== "SUPER_ADMIN") return;
+    const target = accounts.find((a) => a.id === accountId);
+    if (!target) return;
+
+    setAccounts((prev) =>
+      prev.map((a) => {
+        if (a.id === accountId) {
+          return {
+            ...a,
+            name: updates.name,
+            username: updates.username,
+            storeName: updates.storeName,
+            email: updates.email,
+          };
+        }
+        // Keep child cashiers' storeName synchronized when Owner storeName changes
+        if (
+          target.role === "OWNER" &&
+          a.role === "CASHIER" &&
+          a.parentOwnerId === accountId
+        ) {
+          return {
+            ...a,
+            storeName: updates.storeName,
+          };
+        }
+        return a;
+      })
+    );
+
+    appendAudit(
+      "ACCOUNT_UPDATED",
+      "Super Admin",
+      `Super Admin memperbarui profil @${updates.username} (${updates.storeName}).`
+    );
+    showToast(`Data akun @${updates.username} berhasil diperbarui!`);
+  };
+
+  const handleAddFeedback = (fb: DeveloperFeedback) => {
+    setFeedbacks((prev) => [fb, ...prev]);
+    appendAudit(
+      "FEEDBACK_SUBMITTED",
+      "Saran Pengembang",
+      `${fb.storeName} (${fb.ownerName}) mengirim saran: "${fb.title}".`
+    );
+    showToast("Saran pengembang berhasil dikirim ke Super Admin!");
+  };
+
+  const handleMarkFeedbackRead = (feedbackId: string) => {
+    setFeedbacks((prev) =>
+      prev.map((f) => (f.id === feedbackId ? { ...f, isRead: true } : f))
+    );
+    showToast("Saran ditandai sudah dibaca.");
+  };
+
+  const handleDeleteFeedback = (feedbackId: string) => {
+    setFeedbacks((prev) => prev.filter((f) => f.id !== feedbackId));
+    showToast("Saran pengembang dihapus.");
+  };
+
+  const handleUpdateAdminWhatsapp = (rawWa: string) => {
+    let digits = rawWa.replace(/\D/g, "");
+    if (digits.startsWith("0")) {
+      digits = `62${digits.slice(1)}`;
+    }
+    setAdminWhatsapp(digits);
+    showToast(
+      digits
+        ? `Nomor WhatsApp Admin disimpan: +${digits}`
+        : "Nomor WhatsApp Admin dikosongkan."
+    );
+  };
+
+  const buildWaRenewalUrl = () => {
+    let digits = adminWhatsapp.replace(/\D/g, "");
+    if (digits.startsWith("0")) {
+      digits = `62${digits.slice(1)}`;
+    }
+    const storeLabel = activeAccount?.storeName || storeSettings.storeName;
+    const expiryLabel = activeAccount
+      ? formatDateOnly(activeAccount.expiresAt)
+      : "-";
+    const remainingLabel = activeAccountTime?.label || "kurang dari 7 hari";
+    const text = `Halo Super Admin KELOKRA, saya Owner toko "${storeLabel}" (@${authSession.username}). Masa aktif akun saya ${remainingLabel} (berakhir ${expiryLabel}). Mohon bantu perpanjangan langganan.`;
+    return digits
+      ? `https://wa.me/${digits}?text=${encodeURIComponent(text)}`
+      : `https://wa.me/?text=${encodeURIComponent(text)}`;
+  };
+
   // Strict RBAC Navigation Items
   const navItems = [
     {
@@ -1367,9 +1484,21 @@ export default function KelokraApp() {
       roles: ["OWNER"],
     },
     {
+      id: "feedback",
+      label: "Saran Pengembang",
+      icon: MessageSquarePlus,
+      roles: ["OWNER"],
+    },
+    {
       id: "super-admin",
       label: "Super Admin",
       icon: ShieldCheck,
+      roles: ["SUPER_ADMIN"],
+    },
+    {
+      id: "feedback-admin",
+      label: "Saran Client",
+      icon: MessageSquarePlus,
       roles: ["SUPER_ADMIN"],
     },
   ].filter((item) => item.roles.includes(currentRole));
@@ -1503,20 +1632,22 @@ export default function KelokraApp() {
           </div>
 
           <div className="space-y-1 pt-1">
-            <button
-              onClick={() => {
-                setActiveMenu("settings");
-                setMobileMenuOpen(false);
-              }}
-              className={`w-full flex items-center gap-3 px-3.5 py-2 rounded-xl text-xs font-bold transition ${
-                activeMenu === "settings"
-                  ? "bg-white/15 text-white"
-                  : "text-slate-400 hover:text-white hover:bg-white/5"
-              }`}
-            >
-              <Settings className="w-4 h-4" />
-              <span>Pengaturan</span>
-            </button>
+            {currentRole !== "CASHIER" && (
+              <button
+                onClick={() => {
+                  setActiveMenu("settings");
+                  setMobileMenuOpen(false);
+                }}
+                className={`w-full flex items-center gap-3 px-3.5 py-2 rounded-xl text-xs font-bold transition ${
+                  activeMenu === "settings"
+                    ? "bg-white/15 text-white"
+                    : "text-slate-400 hover:text-white hover:bg-white/5"
+                }`}
+              >
+                <Settings className="w-4 h-4" />
+                <span>Pengaturan</span>
+              </button>
+            )}
             <button
               onClick={() => {
                 setActiveMenu("help");
@@ -1767,16 +1898,18 @@ export default function KelokraApp() {
                     )}
                   </div>
 
-                  <button
-                    onClick={() => {
-                      setActiveMenu("settings");
-                      setShowProfileMenu(false);
-                    }}
-                    className="w-full text-left px-3 py-2 rounded-xl hover:bg-slate-50 font-bold text-navy-800 flex items-center gap-2"
-                  >
-                    <Settings className="w-4 h-4 text-slate-500" />
-                    <span>Pengaturan Akun & Toko</span>
-                  </button>
+                  {currentRole !== "CASHIER" && (
+                    <button
+                      onClick={() => {
+                        setActiveMenu("settings");
+                        setShowProfileMenu(false);
+                      }}
+                      className="w-full text-left px-3 py-2 rounded-xl hover:bg-slate-50 font-bold text-navy-800 flex items-center gap-2"
+                    >
+                      <Settings className="w-4 h-4 text-slate-500" />
+                      <span>Pengaturan Akun & Toko</span>
+                    </button>
+                  )}
 
                   <button
                     onClick={handleLogout}
@@ -1823,6 +1956,15 @@ export default function KelokraApp() {
               </div>
 
               <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <a
+                  href={buildWaRenewalUrl()}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold shadow-xs inline-flex items-center gap-1.5 transition"
+                >
+                  <MessageCircle className="w-4 h-4" />
+                  <span>Perpanjang via WhatsApp</span>
+                </a>
                 <button
                   type="button"
                   onClick={handleExportBackup}
@@ -1846,30 +1988,23 @@ export default function KelokraApp() {
             (currentRole === "SUPER_ADMIN" ? (
               <SuperAdminDashboardView
                 userName={currentUserName}
-                accounts={
-                currentRole === "SUPER_ADMIN"
-                  ? accounts
-                  : accounts.filter(
-                      (a) =>
-                        a.id === activeTenantId ||
-                        a.parentOwnerId === activeTenantId ||
-                        (!a.parentOwnerId &&
-                          activeAccount?.storeName &&
-                          a.storeName.toLowerCase() ===
-                            activeAccount.storeName.toLowerCase())
-                    )
-              }
+                accounts={accounts}
+                feedbacks={feedbacks}
                 onNavigate={setActiveMenu}
                 onCreateAccountsBatch={handleCreateAccountsBatch}
                 onExtendAccount={handleExtendAccount}
                 onToggleAccountStatus={handleToggleAccountStatus}
                 onDeleteAccount={handleDeleteAccount}
                 onResetAccountPassword={handleResetAccountPassword}
+                onEditAccount={handleEditAccount}
+                onMarkFeedbackRead={handleMarkFeedbackRead}
+                onDeleteFeedback={handleDeleteFeedback}
               />
             ) : (
               <DashboardView
                 key={`dash-${currentTenantId}`}
                 userName={currentUserName}
+                userRole={currentRole}
                 products={scopedProducts}
                 sales={scopedSales}
                 canUsePos={canUsePos}
@@ -2002,14 +2137,18 @@ export default function KelokraApp() {
               />
             )}
 
-          {(activeMenu === "employees" ||
-            activeMenu === "payment-methods" ||
-            activeMenu === "settings" ||
+          {((activeMenu === "employees" && currentRole === "OWNER") ||
+            (activeMenu === "payment-methods" && currentRole === "OWNER") ||
+            (activeMenu === "settings" && currentRole !== "CASHIER") ||
             activeMenu === "help" ||
-            activeMenu === "super-admin") && (
+            (activeMenu === "super-admin" && currentRole === "SUPER_ADMIN") ||
+            (activeMenu === "feedback" && currentRole === "OWNER") ||
+            (activeMenu === "feedback-admin" &&
+              currentRole === "SUPER_ADMIN")) && (
             <SaasSettingsAdminView
               mode={activeMenu}
               userRole={currentRole}
+              activeOwnerAccount={activeAccount}
               accounts={
                 currentRole === "SUPER_ADMIN"
                   ? accounts
@@ -2025,12 +2164,19 @@ export default function KelokraApp() {
               }
               storeSettings={storeSettings}
               auditLogs={auditLogs}
+              feedbacks={feedbacks}
+              adminWhatsapp={adminWhatsapp}
+              onUpdateAdminWhatsapp={handleUpdateAdminWhatsapp}
               onNavigate={setActiveMenu}
               onCreateAccountsBatch={handleCreateAccountsBatch}
               onExtendAccount={handleExtendAccount}
               onToggleAccountStatus={handleToggleAccountStatus}
               onDeleteAccount={handleDeleteAccount}
               onResetAccountPassword={handleResetAccountPassword}
+              onEditAccount={handleEditAccount}
+              onAddFeedback={handleAddFeedback}
+              onMarkFeedbackRead={handleMarkFeedbackRead}
+              onDeleteFeedback={handleDeleteFeedback}
               onUpdateSettings={(next) => {
                 setStoreSettings(next);
                 showToast("Pengaturan & metode pembayaran berhasil disimpan!");
